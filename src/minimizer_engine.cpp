@@ -608,4 +608,6 @@ std::vector<std::uint64_t> MinimizerEngine::LongestSubsequence(
   return dst;
 }
 
+template void ram::MinimizerEngine::RadixSort<__gnu_cxx::__normal_iterator<ram::MinimizerEngine::Kmer*, std::vector<ram::MinimizerEngine::Kmer, std::allocator<ram::MinimizerEngine::Kmer> > >, uint128_t (*)(ram::MinimizerEngine::Kmer const&)>(__gnu_cxx::__normal_iterator<ram::MinimizerEngine::Kmer*, std::vector<ram::MinimizerEngine::Kmer, std::allocator<ram::MinimizerEngine::Kmer> > >, __gnu_cxx::__normal_iterator<ram::MinimizerEngine::Kmer*, std::vector<ram::MinimizerEngine::Kmer, std::allocator<ram::MinimizerEngine::Kmer> > >, unsigned char, uint128_t (*)(ram::MinimizerEngine::Kmer const&));
+
 }  // namespace ram
