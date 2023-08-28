@@ -26,6 +26,7 @@ option(ram_build_tests "Build unit tests" ${ram_main_project})
 
 find_package(biosoup 0.10.0 QUIET)
 find_package(thread_pool 4.0.0 QUIET)
+find_package(GTest 1.10.0 QUIET)
 
 if (NOT biosoup_FOUND)
   if (ram_install)
@@ -85,24 +86,21 @@ if (ram_build_exe OR ram_build_tests)
     endif ()
   endif ()
 endif ()
+  
+if (NOT GTest_FOUND)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest
+    GIT_TAG release-1.10.0)
 
-if (ram_build_tests)
-  find_package(GTest 1.10.0 QUIET)
-  if (NOT GTest_FOUND)
-    FetchContent_Declare(
-      googletest
-      GIT_REPOSITORY https://github.com/google/googletest
-      GIT_TAG release-1.10.0)
-
-    FetchContent_GetProperties(googletest)
-    if (NOT googletest_POPULATED)
-      FetchContent_Populate(googletest)
-      add_subdirectory(
-        ${googletest_SOURCE_DIR}
-        ${googletest_BINARY_DIR}
-        EXCLUDE_FROM_ALL)
-      add_library(GTest::Main ALIAS gtest_main)
-    endif ()
+  FetchContent_GetProperties(googletest)
+  if (NOT googletest_POPULATED)
+    FetchContent_Populate(googletest)
+    add_subdirectory(
+      ${googletest_SOURCE_DIR}
+      ${googletest_BINARY_DIR}
+      EXCLUDE_FROM_ALL)
+    add_library(GTest::Main ALIAS gtest_main)
   endif ()
 endif ()
 
@@ -116,7 +114,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 target_link_libraries(ram
   biosoup::biosoup
-  thread_pool::thread_pool)
+  thread_pool::thread_pool
+  GTest::Main)
 
 if (ram_install)
   configure_package_config_file(

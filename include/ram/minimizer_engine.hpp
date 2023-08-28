@@ -12,14 +12,20 @@
 #include "biosoup/nucleic_acid.hpp"
 #include "biosoup/overlap.hpp"
 #include "thread_pool/thread_pool.hpp"
+#include "ram/uint128_t.hpp"
+#include "gtest/gtest.h"
 
 namespace ram {
+  
+  namespace test {
+    class RamMinimizerEngineTest_RadixSort_Test;
+  }  // namespace test
 
 class MinimizerEngine {
  public:
   MinimizerEngine(
       std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
-      std::uint32_t k = 15,  // element of [1, 31]
+      std::uint32_t k = 15,  // element of [1, 63]
       std::uint32_t w = 5,
       std::uint32_t bandwidth = 500,
       std::uint32_t chain = 4,
@@ -62,7 +68,7 @@ class MinimizerEngine {
   struct Kmer {
    public:
     Kmer() = default;
-    Kmer(std::uint64_t value, std::uint64_t origin)
+    Kmer(uint128_t value, std::uint64_t origin)
         : value(value),
           origin(origin) {
     }
@@ -79,7 +85,7 @@ class MinimizerEngine {
       return origin & 1;
     }
 
-    static std::uint64_t SortByValue(const Kmer& kmer) {
+    static uint128_t SortByValue(const Kmer& kmer) {
       return kmer.value;
     }
 
@@ -87,7 +93,7 @@ class MinimizerEngine {
       return kmer.origin;
     }
 
-    std::uint64_t value;
+    uint128_t value;
     std::uint64_t origin;
   };
 
@@ -134,21 +140,21 @@ class MinimizerEngine {
    public:
     Index() = default;
 
-    std::uint32_t Find(std::uint64_t key, const std::uint64_t** dst) const;
+    std::uint32_t Find(uint128_t key, const std::uint64_t** dst) const;
 
     struct Hash {
-      std::size_t operator()(std::uint64_t key) const {
-        return std::hash<std::uint64_t>()(key >> 1);
+      std::size_t operator()(uint128_t key) const {
+        return std::hash<uint128_t>()(key >> 1);
       }
     };
     struct KeyEqual {
-      bool operator()(std::uint64_t lhs, std::uint64_t rhs) const {
+      bool operator()(uint128_t lhs, uint128_t rhs) const {
         return (lhs >> 1) == (rhs >> 1);
       }
     };
 
     std::vector<std::uint64_t> origins;
-    std::unordered_map<std::uint64_t, std::uint64_t, Hash, KeyEqual> locator;
+    std::unordered_map<uint128_t, std::uint64_t, Hash, KeyEqual> locator;
   };
 
   std::vector<Kmer> Minimize(
@@ -181,6 +187,8 @@ class MinimizerEngine {
   std::uint32_t occurrence_;
   std::vector<Index> index_;
   std::shared_ptr<thread_pool::ThreadPool> thread_pool_;
+
+  FRIEND_TEST(ram::test::RamMinimizerEngineTest, RadixSort);
 };
 
 }  // namespace ram

@@ -15,7 +15,7 @@ MinimizerEngine::MinimizerEngine(
     std::uint32_t chain,
     std::uint32_t matches,
     std::uint32_t gap)
-    : k_(std::min(std::max(k, 1U), 31U)),
+    : k_(std::min(std::max(k, 1U), 63U)),
       w_(w),
       bandwidth_(bandwidth),
       chain_(chain),
@@ -28,7 +28,7 @@ MinimizerEngine::MinimizerEngine(
           std::make_shared<thread_pool::ThreadPool>(1)) {}
 
 std::uint32_t MinimizerEngine::Index::Find(
-    std::uint64_t key,
+    uint128_t key,
     const std::uint64_t** dst) const {
   auto it = locator.find(key << 1);
   if (it == locator.end()) {
@@ -73,7 +73,7 @@ void MinimizerEngine::Minimize(
       }
       for (auto& it : futures) {
         for (const auto& jt : it.get()) {
-          auto& m = minimizers[jt.value & mask];
+          auto& m = minimizers[std::uint64_t(jt.value & mask)];
           if (m.capacity() == m.size()) {
             m.reserve(m.capacity() * 1.5);
           }
@@ -96,7 +96,7 @@ void MinimizerEngine::Minimize(
                 minimizers[i].begin(),
                 minimizers[i].end(),
                 k_ * 2,
-                Kmer::SortByValue);
+                Kmer::SortByValue); // TODO make radixsort work for 128bit
 
             minimizers[i].emplace_back(-1, -1);  // stop dummy
 
@@ -248,7 +248,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   sketch.emplace_back(-1, sequence->inflated_len << 1);  // stop dummy
 
   for (const auto& kmer : sketch) {
-    std::uint32_t i = kmer.value & mask;
+    std::uint32_t i = std::uint32_t(kmer.value & mask);
     const uint64_t* origins = nullptr;
     auto n = index_[i].Find(kmer.value, &origins);
     if (n > occurrence_) {
@@ -461,9 +461,9 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     return std::vector<Kmer>{};
   }
 
-  std::uint64_t mask = (1ULL << (k_ * 2)) - 1;
+  uint128_t mask = (uint128_t(1) << (k_ * 2)) - 1;
 
-  auto hash = [&] (std::uint64_t key) -> std::uint64_t {
+  auto hash = [&] (uint128_t key) -> uint128_t {
     key = ((~key) + (key << 21)) & mask;
     key = key ^ (key >> 24);
     key = ((key + (key << 3)) + (key << 8)) & mask;
@@ -475,7 +475,7 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   };
 
   std::deque<Kmer> window;
-  auto window_add = [&] (std::uint64_t value, std::uint64_t location) -> void {
+  auto window_add = [&] (uint128_t value, std::uint64_t location) -> void {
     while (!window.empty() && window.back().value > value) {
       window.pop_back();
     }
@@ -488,8 +488,8 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   };
 
   std::uint64_t shift = (k_ - 1) * 2;
-  std::uint64_t minimizer = 0;
-  std::uint64_t reverse_minimizer = 0;
+  uint128_t minimizer = 0;
+  uint128_t reverse_minimizer = 0;
   std::uint64_t id = static_cast<std::uint64_t>(sequence->id) << 32;
   std::uint64_t is_stored = 1ULL << 63;
 
@@ -549,13 +549,13 @@ void MinimizerEngine::RadixSort(
   for (; shift < max_bits; shift += 8) {
     std::uint64_t counts[0x100]{};
     for (auto it = first; it != last; ++it) {
-      ++counts[comp(*it) >> shift & 0xFF];
+      ++counts[std::uint64_t(comp(*it) >> shift & 0xFF)];
     }
     for (std::uint64_t i = 0, j = 0; i < 0x100; j += counts[i++]) {
       buckets[i] = j;
     }
     for (auto it = first; it != last; ++it) {
-      *(begin + buckets[comp(*it) >> shift & 0xFF]++) = *it;
+      *(begin + buckets[std::uint64_t(comp(*it) >> shift & 0xFF)]++) = *it;
     }
     std::swap(begin, first);
     std::swap(end, last);

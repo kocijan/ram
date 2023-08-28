@@ -144,5 +144,46 @@ TEST_F(RamMinimizerEngineTest, Micromize) {
   EXPECT_TRUE(o.front().strand);
 }
 
+TEST_F(RamMinimizerEngineTest, RadixSort) {
+  MinimizerEngine me{};
+  {
+    // sort by value
+    std::vector<ram::MinimizerEngine::Kmer> kmers{
+        {3, 0}, {2, 0}, {1, 0}, {4, 0}, {7, 0}, {6, 0}, {5, 0}};
+    std::vector<ram::MinimizerEngine::Kmer> expected{
+        {1, 0}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0}};
+    me.RadixSort(kmers.begin(), kmers.end(), 64, ram::MinimizerEngine::Kmer::SortByValue);
+    for (std::uint32_t i = 0; i < kmers.size(); ++i) {
+      EXPECT_EQ(expected[i].value, kmers[i].value);
+    }
+  }
+  {
+    // sort by origin
+    std::vector<ram::MinimizerEngine::Kmer> kmers{
+        {0, 3}, {0, 2}, {0, 1}, {0, 4}, {0, 7}, {0, 6}, {0, 5}};
+    std::vector<ram::MinimizerEngine::Kmer> expected{
+        {0, 1}, {0, 2}, {0, 3}, {0, 4}, {0, 5}, {0, 6}, {0, 7}};
+    me.RadixSort(kmers.begin(), kmers.end(), 64, ram::MinimizerEngine::Kmer::SortByOrigin);
+    for (std::uint32_t i = 0; i < kmers.size(); ++i) {
+      EXPECT_EQ(expected[i].origin, kmers[i].origin);
+    }
+  }
+  {
+    // sort by value shifted by 65
+    std::vector<ram::MinimizerEngine::Kmer> kmers{
+      {uint128_t{3, 1} << 65, 0}, {uint128_t{2, 2} << 65, 0}, {uint128_t{1, 3} << 65, 0},
+      {uint128_t{4, 4} << 65, 0}, {uint128_t{7, 5} << 65, 0}, {uint128_t{6, 6} << 65, 0},
+      {uint128_t{5, 7} << 65, 0}};
+    std::vector<ram::MinimizerEngine::Kmer> expected{
+      {uint128_t{1, 3} << 65, 0}, {uint128_t{2, 2} << 65, 0}, {uint128_t{3, 1} << 65, 0},
+      {uint128_t{4, 4} << 65, 0}, {uint128_t{5, 7} << 65, 0}, {uint128_t{6, 6} << 65, 0},
+      {uint128_t{7, 5} << 65, 0}};
+    me.RadixSort(kmers.begin(), kmers.end(), 64, ram::MinimizerEngine::Kmer::SortByValue);
+    for (std::uint32_t i = 0; i < kmers.size(); ++i) {
+      EXPECT_EQ(expected[i].value, kmers[i].value);
+    }
+  }
+}
+
 }  // namespace test
 }  // namespace ram
