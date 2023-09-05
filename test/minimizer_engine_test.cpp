@@ -29,64 +29,74 @@ TEST_F(RamMinimizerEngineTest, Map) {
 
   auto o = me.Map(s.front(), true, true);
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(0, o.front().lhs_id);
-  EXPECT_EQ(30, o.front().lhs_begin);
-  EXPECT_EQ(1869, o.front().lhs_end);
-  EXPECT_EQ(1, o.front().rhs_id);
-  EXPECT_EQ(0, o.front().rhs_begin);
-  EXPECT_EQ(1893, o.front().rhs_end);
-  EXPECT_EQ(585, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(0, o.front().lhs_id);
+    EXPECT_EQ(30, o.front().lhs_begin);
+    EXPECT_EQ(1869, o.front().lhs_end);
+    EXPECT_EQ(1, o.front().rhs_id);
+    EXPECT_EQ(0, o.front().rhs_begin);
+    EXPECT_EQ(1893, o.front().rhs_end);
+    EXPECT_EQ(585, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 
   o = me.Map(s.back(), true, true);
   EXPECT_TRUE(o.empty());
 
   o = me.Map(s.back(), true, false);
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(1, o.front().lhs_id);
-  EXPECT_EQ(0, o.front().lhs_begin);
-  EXPECT_EQ(1893, o.front().lhs_end);
-  EXPECT_EQ(0, o.front().rhs_id);
-  EXPECT_EQ(30, o.front().rhs_begin);
-  EXPECT_EQ(1869, o.front().rhs_end);
-  EXPECT_EQ(585, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(1, o.front().lhs_id);
+    EXPECT_EQ(0, o.front().lhs_begin);
+    EXPECT_EQ(1893, o.front().lhs_end);
+    EXPECT_EQ(0, o.front().rhs_id);
+    EXPECT_EQ(30, o.front().rhs_begin);
+    EXPECT_EQ(1869, o.front().rhs_end);
+    EXPECT_EQ(585, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 
   o = me.Map(s.front(), false, true);
   EXPECT_EQ(2, o.size());
-  EXPECT_EQ(0, o.front().lhs_id);
-  EXPECT_EQ(2, o.front().lhs_begin);
-  EXPECT_EQ(1897, o.front().lhs_end);
-  EXPECT_EQ(0, o.front().rhs_id);
-  EXPECT_EQ(2, o.front().rhs_begin);
-  EXPECT_EQ(1897, o.front().rhs_end);
-  EXPECT_EQ(1895, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(0, o.front().lhs_id);
+    EXPECT_EQ(2, o.front().lhs_begin);
+    EXPECT_EQ(1897, o.front().lhs_end);
+    EXPECT_EQ(0, o.front().rhs_id);
+    EXPECT_EQ(2, o.front().rhs_begin);
+    EXPECT_EQ(1897, o.front().rhs_end);
+    EXPECT_EQ(1895, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 }
 
 TEST_F(RamMinimizerEngineTest, Pair) {
   MinimizerEngine me{};
   auto o = me.Map(s.front(), s.back());
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(0, o.front().lhs_id);
-  EXPECT_EQ(30, o.front().lhs_begin);
-  EXPECT_EQ(1869, o.front().lhs_end);
-  EXPECT_EQ(1, o.front().rhs_id);
-  EXPECT_EQ(0, o.front().rhs_begin);
-  EXPECT_EQ(1893, o.front().rhs_end);
-  EXPECT_EQ(585, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(0, o.front().lhs_id);
+    EXPECT_EQ(30, o.front().lhs_begin);
+    EXPECT_EQ(1869, o.front().lhs_end);
+    EXPECT_EQ(1, o.front().rhs_id);
+    EXPECT_EQ(0, o.front().rhs_begin);
+    EXPECT_EQ(1893, o.front().rhs_end);
+    EXPECT_EQ(585, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 
   o = me.Map(s.back(), s.front());
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(1, o.front().lhs_id);
-  EXPECT_EQ(0, o.front().lhs_begin);
-  EXPECT_EQ(1893, o.front().lhs_end);
-  EXPECT_EQ(0, o.front().rhs_id);
-  EXPECT_EQ(30, o.front().rhs_begin);
-  EXPECT_EQ(1869, o.front().rhs_end);
-  EXPECT_EQ(585, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(1, o.front().lhs_id);
+    EXPECT_EQ(0, o.front().lhs_begin);
+    EXPECT_EQ(1893, o.front().lhs_end);
+    EXPECT_EQ(0, o.front().rhs_id);
+    EXPECT_EQ(30, o.front().rhs_begin);
+    EXPECT_EQ(1869, o.front().rhs_end);
+    EXPECT_EQ(585, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 }
 
 TEST_F(RamMinimizerEngineTest, Filter) {
@@ -123,25 +133,29 @@ TEST_F(RamMinimizerEngineTest, Micromize) {
   me.Minimize(s.begin(), s.end());
   auto o = me.Map(s.front(), true, true, true);
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(0, o.front().lhs_id);
-  EXPECT_EQ(80, o.front().lhs_begin);
-  EXPECT_EQ(1857, o.front().lhs_end);
-  EXPECT_EQ(1, o.front().rhs_id);
-  EXPECT_EQ(55, o.front().rhs_begin);
-  EXPECT_EQ(1881, o.front().rhs_end);
-  EXPECT_EQ(242, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(0, o.front().lhs_id);
+    EXPECT_EQ(80, o.front().lhs_begin);
+    EXPECT_EQ(1857, o.front().lhs_end);
+    EXPECT_EQ(1, o.front().rhs_id);
+    EXPECT_EQ(55, o.front().rhs_begin);
+    EXPECT_EQ(1881, o.front().rhs_end);
+    EXPECT_EQ(242, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 
   o = me.Map(s.front(), s.back(), true);
   EXPECT_EQ(1, o.size());
-  EXPECT_EQ(0, o.front().lhs_id);
-  EXPECT_EQ(80, o.front().lhs_begin);
-  EXPECT_EQ(1857, o.front().lhs_end);
-  EXPECT_EQ(1, o.front().rhs_id);
-  EXPECT_EQ(55, o.front().rhs_begin);
-  EXPECT_EQ(1881, o.front().rhs_end);
-  EXPECT_EQ(242, o.front().score);
-  EXPECT_TRUE(o.front().strand);
+  if (o.size()) {
+    EXPECT_EQ(0, o.front().lhs_id);
+    EXPECT_EQ(80, o.front().lhs_begin);
+    EXPECT_EQ(1857, o.front().lhs_end);
+    EXPECT_EQ(1, o.front().rhs_id);
+    EXPECT_EQ(55, o.front().rhs_begin);
+    EXPECT_EQ(1881, o.front().rhs_end);
+    EXPECT_EQ(242, o.front().score);
+    EXPECT_TRUE(o.front().strand);
+  }
 }
 
 }  // namespace test
