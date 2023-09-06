@@ -19,7 +19,7 @@ class MinimizerEngine {
  public:
   MinimizerEngine(
       std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
-      std::uint32_t k = 15,  // element of [1, 31]
+      std::uint32_t k = 15,  // element of [1, 62]
       std::uint32_t w = 5,
       std::uint32_t bandwidth = 500,
       std::uint32_t chain = 4,

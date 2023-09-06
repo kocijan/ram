@@ -15,7 +15,7 @@ MinimizerEngine::MinimizerEngine(
     std::uint32_t chain,
     std::uint32_t matches,
     std::uint32_t gap)
-    : k_(std::min(std::max(k, 1U), 31U)),
+    : k_(std::min(std::max(k, 1U), 62U)),
       w_(w),
       bandwidth_(bandwidth),
       chain_(chain),
@@ -95,7 +95,7 @@ void MinimizerEngine::Minimize(
             RadixSort(
                 minimizers[i].begin(),
                 minimizers[i].end(),
-                k_ * 2,
+                62U,
                 Kmer::SortByValue);
 
             minimizers[i].emplace_back(-1, -1);  // stop dummy
@@ -299,8 +299,8 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     return std::vector<biosoup::Overlap>{};
   }
 
-  RadixSort(lhs_sketch.begin(), lhs_sketch.end(), k_ * 2, Kmer::SortByValue);
-  RadixSort(rhs_sketch.begin(), rhs_sketch.end(), k_ * 2, Kmer::SortByValue);
+  RadixSort(lhs_sketch.begin(), lhs_sketch.end(), 62U, Kmer::SortByValue);
+  RadixSort(rhs_sketch.begin(), rhs_sketch.end(), 62U, Kmer::SortByValue);
 
   std::uint64_t rhs_id = rhs->id;
 
@@ -461,16 +461,16 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     return std::vector<Kmer>{};
   }
 
-  std::uint64_t mask = (1ULL << (k_ * 2)) - 1;
+  std::uint64_t mask = (1ULL << k_) - 1;
 
   auto hash = [&] (std::uint64_t key) -> std::uint64_t {
-    key = ((~key) + (key << 21)) & mask;
-    key = key ^ (key >> 24);
-    key = ((key + (key << 3)) + (key << 8)) & mask;
-    key = key ^ (key >> 14);
-    key = ((key + (key << 2)) + (key << 4)) & mask;
-    key = key ^ (key >> 28);
-    key = (key + (key << 31)) & mask;
+    key = ~key + (key << 21);
+    key = key ^ key >> 24;
+    key = (key + (key << 3)) + (key << 8);
+    key = key ^ key >> 14;
+    key = (key + (key << 2)) + (key << 4);
+    key = key ^ key >> 28;
+    key = key + (key << 31);
     return key;
   };
 
@@ -487,9 +487,11 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     }
   };
 
-  std::uint64_t shift = (k_ - 1) * 2;
-  std::uint64_t minimizer = 0;
-  std::uint64_t reverse_minimizer = 0;
+  std::uint64_t shift = k_ - 1;
+  std::uint64_t minimizer_lo = 0;
+  std::uint64_t minimizer_hi = 0;
+  std::uint64_t reverse_minimizer_lo = 0;
+  std::uint64_t reverse_minimizer_hi = 0;
   std::uint64_t id = static_cast<std::uint64_t>(sequence->id) << 32;
   std::uint64_t is_stored = 1ULL << 63;
 
@@ -497,13 +499,15 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
 
   for (std::uint32_t i = 0; i < sequence->inflated_len; ++i) {
     std::uint64_t c = sequence->Code(i);
-    minimizer = ((minimizer << 2) | c) & mask;
-    reverse_minimizer = (reverse_minimizer >> 2) | ((c ^ 3) << shift);
+    minimizer_lo = ((minimizer_lo << 1) | (c & 1)) & mask;
+    minimizer_hi = ((minimizer_hi << 1) | (c & 2)) & mask;
+    reverse_minimizer_lo = (reverse_minimizer_lo >> 1) | (((c ^ 3) & 1) << shift);
+    reverse_minimizer_hi = (reverse_minimizer_hi >> 1) | (((c ^ 3) & 2) << shift);
     if (i >= k_ - 1U) {
-      if (minimizer < reverse_minimizer) {
-        window_add(hash(minimizer), (i - (k_ - 1U)) << 1 | 0);
-      } else if (minimizer > reverse_minimizer) {
-        window_add(hash(reverse_minimizer), (i - (k_ - 1U)) << 1 | 1);
+      if (minimizer_hi < reverse_minimizer_hi) {
+        window_add(hash(minimizer_lo) + hash(minimizer_hi), (i - (k_ - 1U)) << 1 | 0);
+      } else if (minimizer_hi > reverse_minimizer_hi) {
+        window_add(hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi), (i - (k_ - 1U)) << 1 | 1);
       }
     }
     if (i >= (k_ - 1U) + (w_ - 1U)) {
@@ -522,9 +526,9 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   }
 
   if (minhash) {
-    RadixSort(dst.begin(), dst.end(), k_ * 2, Kmer::SortByValue);
+    RadixSort(dst.begin(), dst.end(), 62U, Kmer::SortByValue);
     dst.resize(sequence->inflated_len / k_);
-    RadixSort(dst.begin(), dst.end(), 64, Kmer::SortByOrigin);
+    RadixSort(dst.begin(), dst.end(), 64U, Kmer::SortByOrigin);
   }
 
   return dst;
