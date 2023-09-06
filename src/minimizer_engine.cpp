@@ -45,7 +45,8 @@ std::uint32_t MinimizerEngine::Index::Find(
 void MinimizerEngine::Minimize(
     std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
     std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
-    bool minhash) {
+    bool minhash,
+    bool hpc) {
 
   for (auto& it : index_) {
     it.origins.clear();
@@ -67,7 +68,7 @@ void MinimizerEngine::Minimize(
         batch_size += (*first)->inflated_len;
         futures.emplace_back(thread_pool_->Submit(
             [&] (decltype(first) it) -> std::vector<Kmer> {
-              return Minimize(*it, minhash);
+              return Minimize(*it, minhash, hpc);
             },
             first));
       }
@@ -188,8 +189,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     bool avoid_equal,
     bool avoid_symmetric,
     bool minhash,
+    bool hpc,
     std::vector<std::uint32_t>* filtered) const {
-  auto sketch = Minimize(sequence, minhash);
+  auto sketch = Minimize(sequence, minhash, hpc);
   if (sketch.empty()) {
     return std::vector<biosoup::Overlap>{};
   }
@@ -287,14 +289,15 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
 std::vector<biosoup::Overlap> MinimizerEngine::Map(
     const std::unique_ptr<biosoup::NucleicAcid>& lhs,
     const std::unique_ptr<biosoup::NucleicAcid>& rhs,
-    bool minhash) const {
+    bool minhash,
+    bool hpc) const {
 
-  auto lhs_sketch = Minimize(lhs, minhash);
+  auto lhs_sketch = Minimize(lhs, minhash, hpc);
   if (lhs_sketch.empty()) {
     return std::vector<biosoup::Overlap>{};
   }
 
-  auto rhs_sketch = Minimize(rhs);
+  auto rhs_sketch = Minimize(rhs, false, hpc);
   if (rhs_sketch.empty()) {
     return std::vector<biosoup::Overlap>{};
   }
@@ -456,7 +459,8 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
 
 std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     const std::unique_ptr<biosoup::NucleicAcid>& sequence,
-    bool minhash) const {
+    bool minhash,
+    bool hpc) const {
   if (sequence->inflated_len < k_) {
     return std::vector<Kmer>{};
   }
@@ -497,20 +501,38 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
 
   std::vector<Kmer> dst;
 
-  for (std::uint32_t i = 0; i < sequence->inflated_len; ++i) {
+  for (std::uint32_t i = 0, win_span = 0, kmer_span = 0, base_cnt = 0; i < sequence->inflated_len; ++i, ++win_span, ++kmer_span) {
     std::uint64_t c = sequence->Code(i);
+    
+    // skip homopolymer
+    if (hpc && i && sequence->Code(i - 1) == c) {
+      continue;
+    }
+
+    // found new char
+    base_cnt++;
+
+    // remove last from kmer
+    if (base_cnt > k_) {
+      kmer_span--;
+      if (hpc) {
+        auto last_c = sequence->Code(i - kmer_span - 1);
+        while (sequence->Code(i - kmer_span) == last_c) kmer_span--;
+      }
+    }
+
     minimizer_lo = ((minimizer_lo << 1) | (c & 1)) & mask;
     minimizer_hi = ((minimizer_hi << 1) | (c & 2)) & mask;
     reverse_minimizer_lo = (reverse_minimizer_lo >> 1) | (((c ^ 3) & 1) << shift);
     reverse_minimizer_hi = (reverse_minimizer_hi >> 1) | (((c ^ 3) & 2) << shift);
-    if (i >= k_ - 1U) {
+    if (base_cnt >= k_) {
       if (minimizer_hi < reverse_minimizer_hi) {
-        window_add(hash(minimizer_lo) + hash(minimizer_hi), (i - (k_ - 1U)) << 1 | 0);
+        window_add(hash(minimizer_lo) + hash(minimizer_hi), (i - (kmer_span)) << 1 | 0);
       } else if (minimizer_hi > reverse_minimizer_hi) {
-        window_add(hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi), (i - (k_ - 1U)) << 1 | 1);
+        window_add(hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi), (i - (kmer_span)) << 1 | 1);
       }
     }
-    if (i >= (k_ - 1U) + (w_ - 1U)) {
+    if (base_cnt >= (k_) + (w_ - 1U)) {
       for (auto it = window.begin(); it != window.end(); ++it) {
         if (it->value != window.front().value) {
           break;
@@ -521,7 +543,12 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
         dst.emplace_back(it->value, id | it->origin);
         it->origin |= is_stored;
       }
-      window_update(i - (k_ - 1U) - (w_ - 1U) + 1);
+      win_span--;
+      if (hpc) {
+        auto last_c = sequence->Code(i - win_span - 1);
+        while (sequence->Code(i - win_span) == last_c) win_span--;
+      }
+      window_update(i - win_span);
     }
   }
 

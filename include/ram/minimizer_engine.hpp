@@ -39,7 +39,8 @@ class MinimizerEngine {
   void Minimize(
       std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
       std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
-      bool minhash = false);
+      bool minhash = false,
+      bool hpc = false);
 
   // set occurrence frequency threshold
   void Filter(double frequency);
@@ -50,13 +51,15 @@ class MinimizerEngine {
       bool avoid_equal,  // ignore overlaps in which lhs_id == rhs_id
       bool avoid_symmetric,  // ignore overlaps in which lhs_id > rhs_id
       bool minhash = false,  // only lhs
+      bool hpc = false,  // use homopolymer compression
       std::vector<std::uint32_t>* filtered = nullptr) const;
 
   // find overlaps between a pair of sequences
   std::vector<biosoup::Overlap> Map(
       const std::unique_ptr<biosoup::NucleicAcid>& lhs,
       const std::unique_ptr<biosoup::NucleicAcid>& rhs,
-      bool minhash = false) const;  // only lhs
+      bool minhash = false,  // only lhs
+      bool hpc = false) const;
 
  private:
   struct Kmer {
@@ -151,9 +154,11 @@ class MinimizerEngine {
     std::unordered_map<std::uint64_t, std::uint64_t, Hash, KeyEqual> locator;
   };
 
+  // hpc = use homopolymer compression
   std::vector<Kmer> Minimize(
       const std::unique_ptr<biosoup::NucleicAcid>& sequence,
-      bool minhash = false) const;
+      bool minhash = false,
+      bool hpc = false) const;
 
   std::vector<biosoup::Overlap> Chain(
       std::uint64_t lhs_id,
