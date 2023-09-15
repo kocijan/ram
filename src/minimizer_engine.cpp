@@ -418,17 +418,17 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
             lhs_matches += lhs_end - lhs_begin;
             lhs_begin = lhs_pos;
           }
-          lhs_end = lhs_pos + k_ + match.lhs_span();
+          lhs_end = lhs_pos + match.lhs_span();
 
           std::uint32_t rhs_pos = match.rhs_position();
           rhs_pos = strand ?
               rhs_pos :
-              (1U << 31) - (rhs_pos + k_ + match.rhs_span() - 1);
+              (1U << 31) - (rhs_pos + match.rhs_span() - 1);
           if (rhs_pos > rhs_end) {
             rhs_matches += rhs_end - rhs_begin;
             rhs_begin = rhs_pos;
           }
-          rhs_end = rhs_pos + k_+ match.rhs_span();
+          rhs_end = rhs_pos + match.rhs_span();
         }
         lhs_matches += lhs_end - lhs_begin;
         rhs_matches += rhs_end - rhs_begin;
@@ -443,14 +443,14 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
         dst.emplace_back(
             lhs_id,
             first.lhs_position(),
-             last.lhs_position() + k_ + last.lhs_span(),
+             last.lhs_position() + last.lhs_span(),
             matches[j].rhs_id(),
             strand ?
                 first.rhs_position() :
                  last.rhs_position(),
             strand ?
-                 last.rhs_position() + k_ +  last.rhs_span() :
-                first.rhs_position() + k_ + first.rhs_span(),
+                 last.rhs_position() +  last.rhs_span() :
+                first.rhs_position() + first.rhs_span(),
             std::min(lhs_matches, rhs_matches),
             strand);
 
@@ -530,8 +530,8 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     reverse_minimizer_hi = (reverse_minimizer_hi >> 1) | (((c ^ 3) & 2) << shift);
     if (base_cnt >= k_ && kmer_span < 256ULL) {
       std::uint64_t origin =
-      (std::uint64_t(i - (k_ - 1U) - kmer_span) << 33) |
-      ((base_cnt - 1U - (k_ - 1U)) << 1);
+      (std::uint64_t(i + 1U - kmer_span) << 33) |
+      ((base_cnt - (k_ - 1U)) << 1);
       if (minimizer_hi < reverse_minimizer_hi) {
         window_add(((hash(minimizer_lo) + hash(minimizer_hi)) << 8) | kmer_span, origin);
       } else if (minimizer_hi > reverse_minimizer_hi) {
