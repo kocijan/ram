@@ -19,7 +19,7 @@ class MinimizerEngine {
  public:
   MinimizerEngine(
       std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
-      std::uint32_t k = 15,  // element of [1, 62]
+      std::uint32_t k = 15,  // element of [1, 63]
       std::uint32_t w = 5,
       std::uint32_t bandwidth = 500,
       std::uint32_t chain = 4,
@@ -65,9 +65,17 @@ class MinimizerEngine {
   struct Kmer {
    public:
     Kmer() = default;
-    Kmer(std::uint64_t value, std::uint64_t origin)
-        : value(value),
+    Kmer(std::uint64_t description, std::uint64_t origin)
+        : description(description),
           origin(origin) {
+    }
+
+    std::uint64_t value() const {
+      return description >> 8;
+    }
+
+    std::uint8_t span() const {
+      return static_cast<std::uint8_t>(description);
     }
 
     std::uint32_t id() const {
@@ -83,23 +91,24 @@ class MinimizerEngine {
     }
 
     static std::uint64_t SortByValue(const Kmer& kmer) {
-      return kmer.value;
+      return kmer.value();
     }
 
     static std::uint64_t SortByOrigin(const Kmer& kmer) {
       return kmer.origin;
     }
 
-    std::uint64_t value;
+    std::uint64_t description;
     std::uint64_t origin;
   };
 
   struct Match {
    public:
     Match() = default;
-    Match(std::uint64_t group, std::uint64_t positions)
+    Match(std::uint64_t group, std::uint64_t positions, std::uint16_t spans)
         : group(group),
-          positions(positions) {
+          positions(positions),
+          spans(spans) {
     }
 
     std::uint32_t rhs_id() const {
@@ -122,6 +131,14 @@ class MinimizerEngine {
       return static_cast<std::uint32_t>(positions);
     }
 
+    std::uint8_t lhs_span() const {
+      return static_cast<std::uint8_t>(spans >> 8);
+    }
+
+    std::uint8_t rhs_span() const {
+      return static_cast<std::uint8_t>(spans);
+    }
+
     static std::uint64_t SortByGroup(const Match& match) {
       return match.group;
     }
@@ -131,27 +148,30 @@ class MinimizerEngine {
 
     std::uint64_t group;
     std::uint64_t positions;
+    std::uint16_t spans;
   };
 
   class Index {
    public:
     Index() = default;
 
-    std::uint32_t Find(std::uint64_t key, const std::uint64_t** dst) const;
+    std::uint32_t Find(std::uint64_t key, const Kmer** dst) const;
 
     struct Hash {
+      public:
       std::size_t operator()(std::uint64_t key) const {
         return std::hash<std::uint64_t>()(key >> 1);
       }
     };
     struct KeyEqual {
+      public:
       bool operator()(std::uint64_t lhs, std::uint64_t rhs) const {
         return (lhs >> 1) == (rhs >> 1);
       }
     };
 
-    std::vector<std::uint64_t> origins;
-    std::unordered_map<std::uint64_t, std::uint64_t, Hash, KeyEqual> locator;
+    std::vector<Kmer> kmers;
+    std::unordered_map<std::uint64_t, Kmer, Hash, KeyEqual> locator;
   };
 
   // hpc = use homopolymer compression

@@ -15,7 +15,7 @@ MinimizerEngine::MinimizerEngine(
     std::uint32_t chain,
     std::uint32_t matches,
     std::uint32_t gap)
-    : k_(std::min(std::max(k, 1U), 62U)),
+    : k_(std::min(std::max(k, 1U), 63U)),
       w_(w),
       bandwidth_(bandwidth),
       chain_(chain),
@@ -29,7 +29,7 @@ MinimizerEngine::MinimizerEngine(
 
 std::uint32_t MinimizerEngine::Index::Find(
     std::uint64_t key,
-    const std::uint64_t** dst) const {
+    const Kmer** dst) const {
   auto it = locator.find(key << 1);
   if (it == locator.end()) {
     return 0;
@@ -38,8 +38,8 @@ std::uint32_t MinimizerEngine::Index::Find(
     *dst = &(it->second);
     return 1;
   }
-  *dst = &(origins[it->second >> 32]);
-  return static_cast<std::uint32_t>(it->second);
+  *dst = &(kmers[it->second.origin >> 32]);
+  return static_cast<std::uint32_t>(it->second.origin);
 }
 
 void MinimizerEngine::Minimize(
@@ -49,7 +49,7 @@ void MinimizerEngine::Minimize(
     bool hpc) {
 
   for (auto& it : index_) {
-    it.origins.clear();
+    it.kmers.clear();
     it.locator.clear();
   }
 
@@ -74,7 +74,7 @@ void MinimizerEngine::Minimize(
       }
       for (auto& it : futures) {
         for (const auto& jt : it.get()) {
-          auto& m = minimizers[jt.value & mask];
+          auto& m = minimizers[jt.value() & mask];
           if (m.capacity() == m.size()) {
             m.reserve(m.capacity() * 1.5);
           }
@@ -99,13 +99,14 @@ void MinimizerEngine::Minimize(
                 62U,
                 Kmer::SortByValue);
 
-            minimizers[i].emplace_back(-1, -1);  // stop dummy
+                        // stop dummy
+            minimizers[i].emplace_back(~minimizers[i].back().description, -1);
 
             std::size_t num_origins = 0;
             std::size_t num_keys = 0;
 
             for (std::uint64_t j = 1, c = 1; j < minimizers[i].size(); ++j, ++c) {  // NOLINT
-              if (minimizers[i][j - 1].value != minimizers[i][j].value) {
+              if (minimizers[i][j - 1].value() != minimizers[i][j].value()) {
                 if (c > 1) {
                   num_origins += c;
                 }
@@ -124,21 +125,21 @@ void MinimizerEngine::Minimize(
         continue;
       }
 
-      index_[i].origins.reserve(num_entries.first);
+      index_[i].kmers.reserve(num_entries.first);
       index_[i].locator.reserve(num_entries.second);
 
       for (std::uint64_t j = 1, c = 1; j < minimizers[i].size(); ++j, ++c) {
-        if (minimizers[i][j - 1].value != minimizers[i][j].value) {
+        if (minimizers[i][j - 1].value() != minimizers[i][j].value()) {
           if (c == 1) {
             index_[i].locator.emplace(
-                minimizers[i][j - 1].value << 1 | 1,
-                minimizers[i][j - 1].origin);
+                minimizers[i][j - 1].value() << 1 | 1,
+                minimizers[i][j - 1]);
           } else {
             index_[i].locator.emplace(
-                minimizers[i][j - 1].value << 1,
-                index_[i].origins.size() << 32 | c);
+                minimizers[i][j - 1].value() << 1,
+                Kmer(0, index_[i].kmers.size() << 32 | c));
             for (std::uint64_t k = j - c; k < j; ++k) {
-              index_[i].origins.emplace_back(minimizers[i][k].origin);
+              index_[i].kmers.emplace_back(minimizers[i][k]);
             }
           }
           c = 0;
@@ -167,7 +168,7 @@ void MinimizerEngine::Filter(double frequency) {
       if (jt.first & 1) {
         occurrences.emplace_back(1);
       } else {
-        occurrences.emplace_back(static_cast<std::uint32_t>(jt.second));
+        occurrences.emplace_back(static_cast<std::uint32_t>(jt.second.origin));
       }
     }
   }
@@ -197,43 +198,37 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   }
 
   std::vector<Match> matches;
-  auto add_match = [&] (const Kmer& kmer, uint64_t origin) -> void {
-    auto id = [] (std::uint64_t origin) -> std::uint32_t {
-      return static_cast<std::uint32_t>(origin >> 32);
-    };
-    auto position = [] (std::uint64_t origin) -> std::uint32_t {
-      return static_cast<std::uint32_t>(origin) >> 1;
-    };
-    auto strand = [] (std::uint64_t origin) -> bool {
-      return origin & 1;
-    };
+  auto add_match = [&] (const Kmer& kmer, const Kmer* origin) -> void {
 
-    if (avoid_equal && sequence->id == id(origin)) {
+    if (avoid_equal && sequence->id == origin->id()) {
       return;
     }
-    if (avoid_symmetric && sequence->id > id(origin)) {
+    if (avoid_symmetric && sequence->id > origin->id()) {
       return;
     }
 
-    std::uint64_t rhs_id = id(origin);
-    std::uint64_t strand_ = kmer.strand() == strand(origin);
+    std::uint64_t rhs_id = origin->id();
+    std::uint64_t strand_ = kmer.strand() == origin->strand();
     std::uint64_t lhs_pos = kmer.position();
-    std::uint64_t rhs_pos = position(origin);
+    std::uint16_t lhs_span = kmer.span();
+    std::uint64_t rhs_pos = origin->position();
+    std::uint16_t rhs_span = origin->span();
     std::uint64_t diagonal = !strand_ ?
         rhs_pos + lhs_pos :
         rhs_pos - lhs_pos + (3ULL << 30);
 
     matches.emplace_back(
         (((rhs_id << 1) | strand_) << 32) | diagonal,
-        (lhs_pos << 32) | rhs_pos);
+        (lhs_pos << 32) | rhs_pos,
+        (lhs_span << 8) | rhs_span);
   };
 
   struct Hit {
     const Kmer* kmer;
     std::uint32_t n;
-    const uint64_t* origins;
+    const Kmer* origins;
 
-    Hit(const Kmer* kmer, std::uint32_t n, const uint64_t* origins)
+    Hit(const Kmer* kmer, std::uint32_t n, const Kmer* origins)
         : kmer(kmer),
           n(n),
           origins(origins) {}
@@ -250,9 +245,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   sketch.emplace_back(-1, sequence->inflated_len << 1);  // stop dummy
 
   for (const auto& kmer : sketch) {
-    std::uint32_t i = kmer.value & mask;
-    const uint64_t* origins = nullptr;
-    auto n = index_[i].Find(kmer.value, &origins);
+    std::uint32_t i = kmer.value() & mask;
+    const Kmer* origins = nullptr;
+    auto n = index_[i].Find(kmer.value(), &origins);
     if (n > occurrence_) {
       filtered_hits.emplace_back(&kmer, n, origins);
       if (filtered) {
@@ -271,7 +266,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
           filtered_hits.end());
       for (auto it = filtered_hits.begin(); rescuees; rescuees--, ++it) {
         for (; it->n; it->n--, ++it->origins) {
-          add_match(*it->kmer, *it->origins);
+          add_match(*it->kmer, it->origins);
         }
       }
     }
@@ -279,7 +274,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     prev = kmer.position();
 
     for (; n; n--, ++origins) {
-      add_match(kmer, *origins);
+      add_match(kmer, origins);
     }
   }
 
@@ -297,7 +292,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     return std::vector<biosoup::Overlap>{};
   }
 
-  auto rhs_sketch = Minimize(rhs, false, hpc);
+  auto rhs_sketch = Minimize(rhs, minhash, hpc);
   if (rhs_sketch.empty()) {
     return std::vector<biosoup::Overlap>{};
   }
@@ -310,25 +305,28 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   std::vector<Match> matches;
   for (std::uint32_t i = 0, j = 0; i < lhs_sketch.size(); ++i) {
     while (j < rhs_sketch.size()) {
-      if (lhs_sketch[i].value < rhs_sketch[j].value) {
+      if (lhs_sketch[i].value() < rhs_sketch[j].value()) {
         break;
-      } else if (lhs_sketch[i].value == rhs_sketch[j].value) {
+      } else if (lhs_sketch[i].value() == rhs_sketch[j].value()) {
         for (std::uint32_t k = j; k < rhs_sketch.size(); ++k) {
-          if (lhs_sketch[i].value != rhs_sketch[k].value) {
+          if (lhs_sketch[i].value() != rhs_sketch[k].value()) {
             break;
           }
 
           std::uint64_t strand =
               (lhs_sketch[i].strand() & 1) == (rhs_sketch[k].strand() & 1);
           std::uint64_t lhs_pos = lhs_sketch[i].position();
+          std::uint16_t lhs_span = lhs_sketch[i].span();
           std::uint64_t rhs_pos = rhs_sketch[k].position();
+          std::uint16_t rhs_span = rhs_sketch[k].span();
           std::uint64_t diagonal = !strand ?
               rhs_pos + lhs_pos :
               rhs_pos - lhs_pos + (3ULL << 30);
 
           matches.emplace_back(
               (((rhs_id << 1) | strand) << 32) | diagonal,
-              (lhs_pos << 32) | rhs_pos);
+              (lhs_pos << 32) | rhs_pos,
+              (lhs_span << 8) | rhs_span);
         }
         break;
       } else {
@@ -344,7 +342,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
     std::uint64_t lhs_id,
     std::vector<Match>&& matches) const {
   RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
-  matches.emplace_back(-1, -1);  // stop dummy
+  matches.emplace_back(-1, -1, -1);  // stop dummy
 
   std::vector<std::pair<std::uint64_t, std::uint64_t>> intervals;
   for (std::uint64_t i = 1, j = 0; i < matches.size(); ++i) {  // NOLINT
@@ -414,20 +412,23 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
         std::uint32_t rhs_end = 0;
 
         for (std::uint64_t m = l; m < k; ++m) {
-          std::uint32_t lhs_pos = matches[j + indices[m]].lhs_position();
+          const auto& match = matches[j + indices[m]];
+          std::uint32_t lhs_pos = match.lhs_position();
           if (lhs_pos > lhs_end) {
             lhs_matches += lhs_end - lhs_begin;
             lhs_begin = lhs_pos;
           }
-          lhs_end = lhs_pos + k_;
+          lhs_end = lhs_pos + k_ + match.lhs_span();
 
-          std::uint32_t rhs_pos = matches[j + indices[m]].rhs_position();
-          rhs_pos = strand ? rhs_pos : (1U << 31) - (rhs_pos + k_ - 1);
+          std::uint32_t rhs_pos = match.rhs_position();
+          rhs_pos = strand ?
+              rhs_pos :
+              (1U << 31) - (rhs_pos + k_ + match.rhs_span() - 1);
           if (rhs_pos > rhs_end) {
             rhs_matches += rhs_end - rhs_begin;
             rhs_begin = rhs_pos;
           }
-          rhs_end = rhs_pos + k_;
+          rhs_end = rhs_pos + k_+ match.rhs_span();
         }
         lhs_matches += lhs_end - lhs_begin;
         rhs_matches += rhs_end - rhs_begin;
@@ -436,17 +437,20 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
           continue;
         }
 
+        const auto& first = matches[j + indices[l]];
+        const auto& last  = matches[j + indices[k - 1]];
+
         dst.emplace_back(
             lhs_id,
-            matches[j + indices[l]].lhs_position(),
-            k_ + matches[j + indices[k - 1]].lhs_position(),
+            first.lhs_position(),
+             last.lhs_position() + k_ + last.lhs_span(),
             matches[j].rhs_id(),
             strand ?
-                matches[j + indices[l]].rhs_position() :
-                matches[j + indices[k - 1]].rhs_position(),
-            k_ + (strand ?
-                matches[j + indices[k - 1]].rhs_position() :
-                matches[j + indices[l]].rhs_position()),
+                first.rhs_position() :
+                 last.rhs_position(),
+            strand ?
+                 last.rhs_position() + k_ +  last.rhs_span() :
+                first.rhs_position() + k_ + first.rhs_span(),
             std::min(lhs_matches, rhs_matches),
             strand);
 
@@ -479,14 +483,14 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   };
 
   std::deque<Kmer> window;
-  auto window_add = [&] (std::uint64_t value, std::uint64_t location) -> void {
-    while (!window.empty() && window.back().value > value) {
+  auto window_add = [&] (std::uint64_t description, std::uint64_t origin) -> void {
+    while (!window.empty() && window.back().value() > (description >> 8)) {
       window.pop_back();
     }
-    window.emplace_back(value, location);
+    window.emplace_back(description, origin);
   };
   auto window_update = [&] (std::uint32_t position) -> void {
-    while (!window.empty() && (window.front().position()) < position) {
+    while (!window.empty() && window.front().position() < position) {
       window.pop_front();
     }
   };
@@ -497,7 +501,7 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   std::uint64_t reverse_minimizer_lo = 0;
   std::uint64_t reverse_minimizer_hi = 0;
   std::uint64_t id = static_cast<std::uint64_t>(sequence->id) << 32;
-  std::uint64_t is_stored = 1ULL << 63;
+  std::uint64_t is_stored = 1ULL;
 
   std::vector<Kmer> dst;
 
@@ -508,7 +512,6 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     if (hpc && i && sequence->Code(i - 1) == c) {
       continue;
     }
-
     // found new char
     base_cnt++;
 
@@ -525,22 +528,26 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
     minimizer_hi = ((minimizer_hi << 1) | (c & 2)) & mask;
     reverse_minimizer_lo = (reverse_minimizer_lo >> 1) | (((c ^ 3) & 1) << shift);
     reverse_minimizer_hi = (reverse_minimizer_hi >> 1) | (((c ^ 3) & 2) << shift);
-    if (base_cnt >= k_) {
+    if (base_cnt >= k_ && kmer_span < 256ULL) {
+      std::uint64_t origin =
+      (std::uint64_t(i - (k_ - 1U) - kmer_span) << 33) |
+      ((base_cnt - 1U - (k_ - 1U)) << 1);
       if (minimizer_hi < reverse_minimizer_hi) {
-        window_add(hash(minimizer_lo) + hash(minimizer_hi), (i - (kmer_span)) << 1 | 0);
+        window_add(((hash(minimizer_lo) + hash(minimizer_hi)) << 8) | kmer_span, origin);
       } else if (minimizer_hi > reverse_minimizer_hi) {
-        window_add(hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi), (i - (kmer_span)) << 1 | 1);
+        origin |= 1ULL << 32;
+        window_add(((hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi)) << 8) | kmer_span, origin);
       }
     }
     if (base_cnt >= (k_) + (w_ - 1U)) {
       for (auto it = window.begin(); it != window.end(); ++it) {
-        if (it->value != window.front().value) {
+        if (it->value() != window.front().value()) {
           break;
         }
         if (it->origin & is_stored) {
           continue;
         }
-        dst.emplace_back(it->value, id | it->origin);
+        dst.emplace_back(it->description, id | (it->origin >> 32));
         it->origin |= is_stored;
       }
       win_span--;
@@ -548,7 +555,7 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
         auto last_c = sequence->Code(i - win_span - 1);
         while (sequence->Code(i - win_span) == last_c) win_span--;
       }
-      window_update(i - win_span);
+      window_update(base_cnt - 1U - (k_ - 1U) - (w_ - 1U) + 1U);
     }
   }
 

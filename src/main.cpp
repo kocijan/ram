@@ -79,7 +79,7 @@ void Help() {
       "  options:\n"
       "    -k, --kmer-length <int>\n"
       "      default: 15\n"
-      "      length of minimizers\n"
+      "      length of minimizers [1, 63]\n"
       "    -w, --window-length <int>\n"
       "      default: 5\n"
       "      length of sliding window from which minimizers are sampled\n"
