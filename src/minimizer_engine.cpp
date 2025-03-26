@@ -4,6 +4,7 @@
 
 #include <deque>
 #include <stdexcept>
+#include <iostream>
 
 namespace ram {
 
@@ -216,6 +217,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     std::uint64_t diagonal = !strand_ ?
         rhs_pos + lhs_pos :
         rhs_pos - lhs_pos + (3ULL << 30);
+
+    // Print for match: the id of the sequence, the start and end positions of the match in the sequence, the id of the other sequence, and the start and end positions of the match in the other sequence, the length of the match in the sequence, the length of the match in the other sequence, the diagonal of the match, and the strand of the match.
+    std::cerr << "match " << sequence->id << " " << lhs_pos << " " << lhs_pos + lhs_span << " " << rhs_id << " " << (strand_ ? rhs_pos : rhs_pos + rhs_span) << " " << (strand_ ? rhs_pos + rhs_span : rhs_pos) << " " << lhs_span << " " << rhs_span << " " << diagonal << " " << strand_ << std::endl;
 
     matches.emplace_back(
         (((rhs_id << 1) | strand_) << 32) | diagonal,
@@ -436,6 +440,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
           l = k;
           continue;
         }
+
+        /// Print for chain: the id of the sequence, the start and end positions of the chain in the sequence, the id of the other sequence, and the start and end positions of the chain in the other sequence, the length of the chain in the sequence, the length of the chain in the other sequence, and the strand of the chain.
+        std::cerr << "chain " << lhs_id << " " << matches[j + indices[l]].lhs_position() << " " << matches[j + indices[k - 1]].lhs_position() + matches[j + indices[k - 1]].lhs_span() << " " << matches[j + indices[l]].rhs_id() << " " << (strand ? matches[j + indices[l]].rhs_position() : matches[j + indices[k - 1]].rhs_position()) << " " << (strand ? matches[j + indices[k - 1]].rhs_position() + matches[j + indices[k - 1]].rhs_span() : matches[j + indices[l]].rhs_position() + matches[j + indices[l]].rhs_span()) << " " << std::min(lhs_matches, rhs_matches) << " " << strand << std::endl;
 
         const auto& first = matches[j + indices[l]];
         const auto& last  = matches[j + indices[k - 1]];
