@@ -351,10 +351,16 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
   std::vector<std::pair<std::uint64_t, std::uint64_t>> intervals;
   for (std::uint64_t i = 1, j = 0; i < matches.size(); ++i) {  // NOLINT
     if (matches[i].group - matches[j].group > bandwidth_) {
-      if (i - j >= 4) {
-        if (!intervals.empty() && intervals.back().second > j) {  // extend
+      // if (i - j >= 4) {
+      if (i - j >= std::min(chain_, 4U))
+      {
+
+        if (!intervals.empty() && intervals.back().second > j)
+        { // extend
           intervals.back().second = i;
-        } else {  // new
+        }
+        else
+        { // new
           intervals.emplace_back(j, i);
         }
       }
