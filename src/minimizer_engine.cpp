@@ -282,7 +282,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     }
   }
 
-  return Chain(sequence->id, std::move(matches));
+  return ChainDP(sequence->id, std::move(matches));
 }
 
 std::vector<biosoup::Overlap> MinimizerEngine::Map(
@@ -339,7 +339,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     }
   }
 
-  return Chain(lhs->id, std::move(matches));
+  return ChainDP(lhs->id, std::move(matches));
 }
 
 std::vector<biosoup::Overlap> MinimizerEngine::Chain(
@@ -472,6 +472,392 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
     }
   }
   return dst;
+}
+
+static inline float log2f(float x) // NB: this doesn't work when x<2
+{
+  union
+  {
+    float f;
+    uint32_t i;
+  } z = {x};
+  float log_2 = ((z.i >> 23) & 255) - 128;
+  z.i &= ~(255 << 23);
+  z.i += 127 << 23;
+  log_2 += (-0.34484843f * z.f + 2.02466578f) * z.f - 0.67487759f;
+  return log_2;
+}
+
+// Helper function to compute score between two anchors
+int32_t MinimizerEngine::ComputeDPScore(
+    const std::pair<std::uint32_t, std::uint32_t> &ai,
+    const std::pair<std::uint32_t, std::uint32_t> &aj,
+    std::uint32_t max_dist_x,
+    std::uint32_t max_dist_y,
+    std::uint32_t bandwidth,
+    float chain_gap_scale,
+    float chain_skip_scale) const
+{
+
+  int32_t dq = ai.second - aj.second; // Distance in query
+  int32_t dr = ai.first - aj.first;   // Distance in reference
+
+  if (dq <= 0 || dq > static_cast<int32_t>(max_dist_x))
+  {
+    return std::numeric_limits<int32_t>::min();
+  }
+
+  if (dr <= 0 || dq > static_cast<int32_t>(max_dist_y))
+  {
+    return std::numeric_limits<int32_t>::min();
+  }
+
+  int32_t dd = std::abs(dr - dq); // Deviation from diagonal
+  if (dd > static_cast<int32_t>(bandwidth))
+  {
+    return std::numeric_limits<int32_t>::min();
+  }
+
+  int32_t dg = std::min(dr, dq); // Min of distances
+  int32_t q_span = k_;           // Use the kmer length
+
+  int32_t score = std::min(q_span, dg); // Base score
+
+  if (dd || dg > q_span)
+  {
+    float lin_pen = chain_gap_scale * dd + chain_skip_scale * dg;
+    float log_pen = dd >= 1 ? log2f(dd + 1) : 0.0f;
+    score -= static_cast<int32_t>(lin_pen + 0.5f * log_pen);
+  }
+
+  return score;
+}
+
+// Helper function for backtracking through chains
+std::vector<std::uint64_t> MinimizerEngine::BacktrackDP(
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> &a,
+    const std::vector<int32_t> &f,
+    const std::vector<int64_t> &p,
+    int32_t min_cnt,
+    int32_t min_sc,
+    int32_t max_drop)
+{
+
+  std::vector<std::uint64_t> chains;
+  std::vector<bool> used(a.size(), false);
+
+  // Sort anchors by score in descending order
+  std::vector<std::pair<int32_t, int64_t>> scores;
+  for (int64_t i = 0; i < static_cast<int64_t>(a.size()); ++i)
+  {
+    if (f[i] >= min_sc)
+    {
+      scores.emplace_back(f[i], i);
+    }
+  }
+
+  std::sort(scores.begin(), scores.end(), std::greater<std::pair<int32_t, int64_t>>());
+
+  // Process anchors in decreasing order of score
+  for (const auto &score : scores)
+  {
+    int64_t i = score.second;
+    if (used[i])
+      continue;
+
+    // Collect chain anchors
+    std::vector<int64_t> chain;
+    int32_t max_drop_so_far = 0;
+    int32_t max_f = f[i];
+
+    while (i >= 0)
+    {
+      if (used[i])
+        break;
+
+      used[i] = true;
+      chain.push_back(i);
+
+      if (p[i] >= 0)
+      {
+        int32_t gap_sc = f[i] - f[p[i]];
+        max_drop_so_far = std::max(max_drop_so_far, gap_sc);
+        if (max_drop_so_far > max_drop)
+          break;
+      }
+
+      i = p[i];
+    }
+
+    // Add chain if it meets criteria
+    if (chain.size() >= static_cast<size_t>(min_cnt) && max_f >= min_sc)
+    {
+      std::reverse(chain.begin(), chain.end());
+      chains.emplace_back((static_cast<std::uint64_t>(max_f) << 32) | chain.size());
+      // Store chain info in a format compatible with ram
+    }
+  }
+
+  return chains;
+}
+
+// New DP-based chaining function with same signature as Chain
+std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
+    std::uint64_t lhs_id,
+    std::vector<Match> &&matches) const
+{
+  // Set default parameters
+  std::uint32_t max_dist_x = 500;          // Max gap in reference
+  std::uint32_t max_dist_y = 500;          // Max gap in query
+  std::uint32_t dp_bandwidth = bandwidth_; // Use existing bandwidth parameter
+  std::uint32_t max_skip = 25;             // Max anchors to skip
+  std::uint32_t max_iter = 5000;           // Max iterations
+  int32_t min_cnt = chain_;                // Min anchors in chain, use existing parameter
+  int32_t min_sc = matches_;               // Min score required, use existing parameter
+  float chain_gap_scale = 0.01f * k_;      // Gap cost scale
+  float chain_skip_scale = 0.01f * k_;     // Skip cost scale
+  int32_t max_drop = dp_bandwidth;         // Max score drop
+
+  if (matches.empty())
+  {
+    return std::vector<biosoup::Overlap>{};
+  }
+
+  // Sort matches by group (to identify strands)
+  RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
+  matches.emplace_back(-1, -1, -1); // stop dummy
+
+  std::vector<biosoup::Overlap> overlaps;
+
+  // Skip interval identification and process all matches together
+  // Check if we have enough matches to form a chain
+  if (matches.size() - 1 < static_cast<std::size_t>(min_cnt))
+  {
+    return overlaps;
+  }
+
+  // Sort matches by position
+  RadixSort(
+      matches.begin(),
+      matches.end() - 1, // Exclude the dummy
+      64,
+      Match::SortByPositions);
+
+  std::uint64_t strand = matches[0].strand();
+
+  // Convert matches to anchors for DP
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> anchors;
+  for (std::size_t k = 0; k < matches.size() - 1; ++k)
+  {
+    // Only include matches with the same strand orientation
+    if (matches[k].strand() == strand)
+    {
+      anchors.emplace_back(
+          matches[k].rhs_position(),
+          matches[k].lhs_position());
+    }
+  }
+
+  int64_t n_a = anchors.size();
+  if (n_a < min_cnt)
+  {
+    return overlaps;
+  }
+
+  // Allocate memory for DP arrays
+  std::vector<int32_t> f(n_a);     // Score array
+  std::vector<int64_t> p(n_a, -1); // Predecessor array
+  std::vector<int32_t> t(n_a, 0);  // Temporary array for backtracking
+
+  // Fill the score and backtrack arrays
+  for (int64_t a_i = 0, st = 0; a_i < n_a; ++a_i)
+  {
+    int64_t max_j = -1;
+    int32_t max_f = 1; // Default score for a single anchor
+    uint32_t n_skip = 0;
+
+    // Find appropriate starting point
+    while (st < a_i && (anchors[a_i].first - anchors[st].first > max_dist_x))
+    {
+      ++st;
+    }
+
+    // Limit iterations
+    if (a_i - st > static_cast<int64_t>(max_iter))
+    {
+      st = a_i - max_iter;
+    }
+
+    // DP calculation - find best predecessor
+    for (int64_t a_j = a_i - 1; a_j >= st; --a_j)
+    {
+      int32_t sc = ComputeDPScore(
+          anchors[a_i], anchors[a_j],
+          max_dist_x, max_dist_y,
+          dp_bandwidth, chain_gap_scale,
+          chain_skip_scale);
+
+      if (sc == std::numeric_limits<int32_t>::min())
+      {
+        continue;
+      }
+
+      sc += f[a_j];
+      if (sc > max_f)
+      {
+        max_f = sc;
+        max_j = a_j;
+        if (n_skip > 0)
+        {
+          --n_skip;
+        }
+      }
+      else if (t[a_j] == a_i)
+      {
+        if (++n_skip > max_skip)
+        {
+          break;
+        }
+      }
+
+      if (p[a_j] >= 0)
+      {
+        t[p[a_j]] = a_i;
+      }
+    }
+
+    // Set score and predecessor
+    f[a_i] = max_f;
+    p[a_i] = max_j;
+  }
+
+  // Backtrack to find chains - process by score (highest to lowest)
+  std::vector<bool> used(n_a, false);
+  std::vector<std::vector<int64_t>> chains;
+
+  // Sort anchors by score in descending order
+  std::vector<std::pair<int32_t, int64_t>> scored_anchors;
+  for (int64_t i = 0; i < n_a; ++i)
+  {
+    if (f[i] >= min_sc)
+    {
+      scored_anchors.emplace_back(f[i], i);
+    }
+  }
+
+  std::sort(scored_anchors.begin(), scored_anchors.end(),
+            std::greater<std::pair<int32_t, int64_t>>());
+
+  // Process anchors in decreasing order of score
+  for (const auto &scored_anchor : scored_anchors)
+  {
+    int64_t a_i = scored_anchor.second;
+
+    if (used[a_i])
+      continue;
+
+    std::vector<int64_t> chain;
+    int32_t max_drop_so_far = 0;
+    int32_t max_f = f[a_i];
+    int64_t curr = a_i;
+
+    // Backtrack to build the chain
+    while (curr >= 0)
+    {
+      if (used[curr])
+        break;
+
+      used[curr] = true;
+      chain.push_back(curr);
+
+      if (p[curr] >= 0)
+      {
+        int32_t gap_sc = f[curr] - f[p[curr]];
+        max_drop_so_far = std::max(max_drop_so_far, gap_sc);
+        if (max_drop_so_far > max_drop)
+          break;
+      }
+
+      curr = p[curr];
+    }
+
+    // Add chain if it meets criteria
+    if (chain.size() >= static_cast<size_t>(min_cnt) && max_f >= min_sc)
+    {
+      std::reverse(chain.begin(), chain.end());
+      chains.push_back(chain);
+    }
+  }
+
+  // Convert chains to overlaps
+  for (const auto &chain : chains)
+  {
+    if (chain.empty())
+      continue;
+
+    std::uint32_t lhs_matches = 0;
+    std::uint32_t lhs_begin = 0;
+    std::uint32_t lhs_end = 0;
+    std::uint32_t rhs_matches = 0;
+    std::uint32_t rhs_begin = 0;
+    std::uint32_t rhs_end = 0;
+
+    // Calculate match lengths
+    for (const auto &idx : chain)
+    {
+      const auto &match_idx = matches[idx]; // Get actual match from the original array
+
+      std::uint32_t lhs_pos = match_idx.lhs_position();
+      if (lhs_pos > lhs_end)
+      {
+        lhs_matches += lhs_end - lhs_begin;
+        lhs_begin = lhs_pos;
+      }
+      lhs_end = lhs_pos + match_idx.lhs_span();
+
+      std::uint32_t rhs_pos = match_idx.rhs_position();
+      rhs_pos = strand ? rhs_pos : (1U << 31) - (rhs_pos + match_idx.rhs_span() - 1);
+      if (rhs_pos > rhs_end)
+      {
+        rhs_matches += rhs_end - rhs_begin;
+        rhs_begin = rhs_pos;
+      }
+      rhs_end = rhs_pos + match_idx.rhs_span();
+    }
+    lhs_matches += lhs_end - lhs_begin;
+    rhs_matches += rhs_end - rhs_begin;
+
+    if (std::min(lhs_matches, rhs_matches) < matches_)
+    {
+      continue;
+    }
+
+    // Create the overlap
+    const auto &first_match = matches[chain.front()];
+    const auto &last_match = matches[chain.back()];
+
+    // Print chain details
+    std::cerr << "dp_chain " << lhs_id << " "
+              << first_match.lhs_position() << " "
+              << last_match.lhs_position() + last_match.lhs_span() << " "
+              << first_match.rhs_id() << " "
+              << (strand ? first_match.rhs_position() : last_match.rhs_position()) << " "
+              << (strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span()) << " "
+              << std::min(lhs_matches, rhs_matches) << " "
+              << strand << std::endl;
+
+    overlaps.emplace_back(
+        lhs_id,
+        first_match.lhs_position(),
+        last_match.lhs_position() + last_match.lhs_span(),
+        first_match.rhs_id(),
+        strand ? first_match.rhs_position() : last_match.rhs_position(),
+        strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span(),
+        std::min(lhs_matches, rhs_matches),
+        strand);
+  }
+
+  return overlaps;
 }
 
 std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(

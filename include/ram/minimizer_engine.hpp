@@ -143,7 +143,8 @@ class MinimizerEngine {
       return match.group;
     }
     static std::uint64_t SortByPositions(const Match& match) {
-      return match.positions;
+      // return match.positions;
+      return ((match.positions & 0xFFFFFFFF) << 32) | (match.positions >> 32);
     }
 
     std::uint64_t group;
@@ -183,6 +184,30 @@ class MinimizerEngine {
   std::vector<biosoup::Overlap> Chain(
       std::uint64_t lhs_id,
       std::vector<Match>&& matches) const;
+
+  // New DP-based chaining function to replace/supplement the LIS-based Chain
+  std::vector<biosoup::Overlap> ChainDP(
+      std::uint64_t lhs_id,
+      std::vector<Match> &&matches) const;
+
+  // Helper function for ChainDP to compute score between two anchors
+  int32_t ComputeDPScore(
+      const std::pair<std::uint32_t, std::uint32_t> &ai,
+      const std::pair<std::uint32_t, std::uint32_t> &aj,
+      std::uint32_t max_dist_x,
+      std::uint32_t max_dist_y,
+      std::uint32_t bandwidth,
+      float chain_gap_scale,
+      float chain_skip_scale) const;
+
+  // Helper function for ChainDP to backtrack through chains
+  static std::vector<std::uint64_t> BacktrackDP(
+      std::vector<std::pair<std::uint32_t, std::uint32_t>> &a,
+      const std::vector<int32_t> &f,
+      const std::vector<int64_t> &p,
+      int32_t min_cnt,
+      int32_t min_sc,
+      int32_t max_drop);
 
   template<typename RandomAccessIterator, typename Compare>
   static void RadixSort(
