@@ -219,7 +219,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
         rhs_pos - lhs_pos + (3ULL << 30);
 
     // Print for match: the id of the sequence, the start and end positions of the match in the sequence, the id of the other sequence, and the start and end positions of the match in the other sequence, the length of the match in the sequence, the length of the match in the other sequence, the diagonal of the match, and the strand of the match.
-    std::cerr << "match " << sequence->id << " " << lhs_pos << " " << lhs_pos + lhs_span << " " << rhs_id << " " << (strand_ ? rhs_pos : rhs_pos + rhs_span) << " " << (strand_ ? rhs_pos + rhs_span : rhs_pos) << " " << lhs_span << " " << rhs_span << " " << diagonal << " " << strand_ << std::endl;
+    // std::cerr << "match " << sequence->id << " " << lhs_pos << " " << lhs_pos + lhs_span << " " << rhs_id << " " << (strand_ ? rhs_pos : rhs_pos + rhs_span) << " " << (strand_ ? rhs_pos + rhs_span : rhs_pos) << " " << lhs_span << " " << rhs_span << " " << diagonal << " " << strand_ << std::endl;
 
     matches.emplace_back(
         (((rhs_id << 1) | strand_) << 32) | diagonal,
@@ -282,7 +282,46 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     }
   }
 
-  return ChainDP(sequence->id, std::move(matches));
+  // Group matches by (rhs_id, strand) pairs and call ChainDP separately
+  std::vector<biosoup::Overlap> all_overlaps;
+
+  if (!matches.empty())
+  {
+    RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
+
+    std::uint64_t current_group = matches[0].group >> 32;
+    std::size_t group_start = 0;
+
+    for (std::size_t i = 1; i <= matches.size(); ++i)
+    {
+      if (i == matches.size() || (matches[i].group >> 32) != current_group)
+      {
+        // Extract matches for current group
+        std::vector<Match> group_matches;
+        group_matches.reserve(i - group_start);
+        for (std::size_t j = group_start; j < i; ++j)
+        {
+          group_matches.emplace_back(std::move(matches[j]));
+        }
+
+        // Call ChainDP for this group
+        auto group_overlaps = ChainDP(sequence->id, std::move(group_matches));
+
+        // Move results to combined vector
+        all_overlaps.insert(all_overlaps.end(),
+                            std::make_move_iterator(group_overlaps.begin()),
+                            std::make_move_iterator(group_overlaps.end()));
+
+        if (i < matches.size())
+        {
+          current_group = matches[i].group >> 32;
+          group_start = i;
+        }
+      }
+    }
+  }
+
+  return all_overlaps;
 }
 
 std::vector<biosoup::Overlap> MinimizerEngine::Map(
@@ -339,7 +378,46 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
     }
   }
 
-  return ChainDP(lhs->id, std::move(matches));
+  // Group matches by (rhs_id, strand) pairs and call ChainDP separately
+  std::vector<biosoup::Overlap> all_overlaps;
+
+  if (!matches.empty())
+  {
+    RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
+
+    std::uint64_t current_group = matches[0].group >> 32;
+    std::size_t group_start = 0;
+
+    for (std::size_t i = 1; i <= matches.size(); ++i)
+    {
+      if (i == matches.size() || (matches[i].group >> 32) != current_group)
+      {
+        // Extract matches for current group
+        std::vector<Match> group_matches;
+        group_matches.reserve(i - group_start);
+        for (std::size_t j = group_start; j < i; ++j)
+        {
+          group_matches.emplace_back(std::move(matches[j]));
+        }
+
+        // Call ChainDP for this group
+        auto group_overlaps = ChainDP(lhs->id, std::move(group_matches));
+
+        // Move results to combined vector
+        all_overlaps.insert(all_overlaps.end(),
+                            std::make_move_iterator(group_overlaps.begin()),
+                            std::make_move_iterator(group_overlaps.end()));
+
+        if (i < matches.size())
+        {
+          current_group = matches[i].group >> 32;
+          group_start = i;
+        }
+      }
+    }
+  }
+
+  return all_overlaps;
 }
 
 std::vector<biosoup::Overlap> MinimizerEngine::Chain(
@@ -448,7 +526,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
         }
 
         /// Print for chain: the id of the sequence, the start and end positions of the chain in the sequence, the id of the other sequence, and the start and end positions of the chain in the other sequence, the length of the chain in the sequence, the length of the chain in the other sequence, and the strand of the chain.
-        std::cerr << "chain " << lhs_id << " " << matches[j + indices[l]].lhs_position() << " " << matches[j + indices[k - 1]].lhs_position() + matches[j + indices[k - 1]].lhs_span() << " " << matches[j + indices[l]].rhs_id() << " " << (strand ? matches[j + indices[l]].rhs_position() : matches[j + indices[k - 1]].rhs_position()) << " " << (strand ? matches[j + indices[k - 1]].rhs_position() + matches[j + indices[k - 1]].rhs_span() : matches[j + indices[l]].rhs_position() + matches[j + indices[l]].rhs_span()) << " " << std::min(lhs_matches, rhs_matches) << " " << strand << std::endl;
+        // std::cerr << "chain " << lhs_id << " " << matches[j + indices[l]].lhs_position() << " " << matches[j + indices[k - 1]].lhs_position() + matches[j + indices[k - 1]].lhs_span() << " " << matches[j + indices[l]].rhs_id() << " " << (strand ? matches[j + indices[l]].rhs_position() : matches[j + indices[k - 1]].rhs_position()) << " " << (strand ? matches[j + indices[k - 1]].rhs_position() + matches[j + indices[k - 1]].rhs_span() : matches[j + indices[l]].rhs_position() + matches[j + indices[l]].rhs_span()) << " " << std::min(lhs_matches, rhs_matches) << " " << strand << std::endl;
 
         const auto& first = matches[j + indices[l]];
         const auto& last  = matches[j + indices[k - 1]];
@@ -533,74 +611,6 @@ int32_t MinimizerEngine::ComputeDPScore(
   return score;
 }
 
-// Helper function for backtracking through chains
-std::vector<std::uint64_t> MinimizerEngine::BacktrackDP(
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> &a,
-    const std::vector<int32_t> &f,
-    const std::vector<int64_t> &p,
-    int32_t min_cnt,
-    int32_t min_sc,
-    int32_t max_drop)
-{
-
-  std::vector<std::uint64_t> chains;
-  std::vector<bool> used(a.size(), false);
-
-  // Sort anchors by score in descending order
-  std::vector<std::pair<int32_t, int64_t>> scores;
-  for (int64_t i = 0; i < static_cast<int64_t>(a.size()); ++i)
-  {
-    if (f[i] >= min_sc)
-    {
-      scores.emplace_back(f[i], i);
-    }
-  }
-
-  std::sort(scores.begin(), scores.end(), std::greater<std::pair<int32_t, int64_t>>());
-
-  // Process anchors in decreasing order of score
-  for (const auto &score : scores)
-  {
-    int64_t i = score.second;
-    if (used[i])
-      continue;
-
-    // Collect chain anchors
-    std::vector<int64_t> chain;
-    int32_t max_drop_so_far = 0;
-    int32_t max_f = f[i];
-
-    while (i >= 0)
-    {
-      if (used[i])
-        break;
-
-      used[i] = true;
-      chain.push_back(i);
-
-      if (p[i] >= 0)
-      {
-        int32_t gap_sc = f[i] - f[p[i]];
-        max_drop_so_far = std::max(max_drop_so_far, gap_sc);
-        if (max_drop_so_far > max_drop)
-          break;
-      }
-
-      i = p[i];
-    }
-
-    // Add chain if it meets criteria
-    if (chain.size() >= static_cast<size_t>(min_cnt) && max_f >= min_sc)
-    {
-      std::reverse(chain.begin(), chain.end());
-      chains.emplace_back((static_cast<std::uint64_t>(max_f) << 32) | chain.size());
-      // Store chain info in a format compatible with ram
-    }
-  }
-
-  return chains;
-}
-
 // New DP-based chaining function with same signature as Chain
 std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
     std::uint64_t lhs_id,
@@ -614,13 +624,22 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
   std::uint32_t max_iter = 5000;           // Max iterations
   int32_t min_cnt = chain_;                // Min anchors in chain, use existing parameter
   int32_t min_sc = matches_;               // Min score required, use existing parameter
-  float chain_gap_scale = 0.01f * k_;      // Gap cost scale
-  float chain_skip_scale = 0.01f * k_;     // Skip cost scale
+  float chain_gap_scale = 0.008f * k_;     // Gap cost scale
+  float chain_skip_scale = 0.000f * k_;    // Skip cost scale
   int32_t max_drop = dp_bandwidth;         // Max score drop
 
   if (matches.empty())
   {
     return std::vector<biosoup::Overlap>{};
+  }
+
+  if (max_dist_x < dp_bandwidth)
+  {
+    max_dist_x = dp_bandwidth;
+  }
+  if (max_dist_y < dp_bandwidth)
+  {
+    max_dist_y = dp_bandwidth;
   }
 
   // Sort matches by group (to identify strands)
@@ -837,14 +856,14 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
     const auto &last_match = matches[chain.back()];
 
     // Print chain details
-    std::cerr << "dp_chain " << lhs_id << " "
-              << first_match.lhs_position() << " "
-              << last_match.lhs_position() + last_match.lhs_span() << " "
-              << first_match.rhs_id() << " "
-              << (strand ? first_match.rhs_position() : last_match.rhs_position()) << " "
-              << (strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span()) << " "
-              << std::min(lhs_matches, rhs_matches) << " "
-              << strand << std::endl;
+    // std::cerr << "dp_chain " << lhs_id << " "
+    //           << first_match.lhs_position() << " "
+    //           << last_match.lhs_position() + last_match.lhs_span() << " "
+    //           << first_match.rhs_id() << " "
+    //           << (strand ? first_match.rhs_position() : last_match.rhs_position()) << " "
+    //           << (strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span()) << " "
+    //           << std::min(lhs_matches, rhs_matches) << " "
+    //           << strand << std::endl;
 
     overlaps.emplace_back(
         lhs_id,
@@ -855,6 +874,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
         strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span(),
         std::min(lhs_matches, rhs_matches),
         strand);
+
+    // break?
+    break;
   }
 
   return overlaps;

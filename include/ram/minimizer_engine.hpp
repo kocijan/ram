@@ -17,49 +17,49 @@ namespace ram {
 
 class MinimizerEngine {
  public:
-  MinimizerEngine(
-      std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
-      std::uint32_t k = 15,  // element of [1, 63]
-      std::uint32_t w = 5,
-      std::uint32_t bandwidth = 500,
-      std::uint32_t chain = 4,
-      std::uint32_t matches = 100,
-      std::uint32_t gap = 10000);
+   MinimizerEngine(
+       std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
+       std::uint32_t k = 51, // element of [1, 63]
+       std::uint32_t w = 5,
+       std::uint32_t bandwidth = 2000,
+       std::uint32_t chain = 3,
+       std::uint32_t matches = 40,
+       std::uint32_t gap = 10000);
 
-  MinimizerEngine(const MinimizerEngine&) = delete;
-  MinimizerEngine& operator=(const MinimizerEngine&) = delete;
+   MinimizerEngine(const MinimizerEngine &) = delete;
+   MinimizerEngine &operator=(const MinimizerEngine &) = delete;
 
-  MinimizerEngine(MinimizerEngine&&) = default;
-  MinimizerEngine& operator=(MinimizerEngine&&) = default;
+   MinimizerEngine(MinimizerEngine &&) = default;
+   MinimizerEngine &operator=(MinimizerEngine &&) = default;
 
-  ~MinimizerEngine() = default;
+   ~MinimizerEngine() = default;
 
-  // transform set of sequences to minimizer index
-  // minhash = pick only the smallest sequence->data.size() / k minimizers
-  void Minimize(
-      std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
-      std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
-      bool minhash = false,
-      bool hpc = false);
+   // transform set of sequences to minimizer index
+   // minhash = pick only the smallest sequence->data.size() / k minimizers
+   void Minimize(
+       std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
+       std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
+       bool minhash = false,
+       bool hpc = false);
 
-  // set occurrence frequency threshold
-  void Filter(double frequency);
+   // set occurrence frequency threshold
+   void Filter(double frequency);
 
-  // find overlaps in preconstructed minimizer index
-  std::vector<biosoup::Overlap> Map(
-      const std::unique_ptr<biosoup::NucleicAcid>& sequence,
-      bool avoid_equal,  // ignore overlaps in which lhs_id == rhs_id
-      bool avoid_symmetric,  // ignore overlaps in which lhs_id > rhs_id
-      bool minhash = false,  // only lhs
-      bool hpc = false,  // use homopolymer compression
-      std::vector<std::uint32_t>* filtered = nullptr) const;
+   // find overlaps in preconstructed minimizer index
+   std::vector<biosoup::Overlap> Map(
+       const std::unique_ptr<biosoup::NucleicAcid> &sequence,
+       bool avoid_equal,     // ignore overlaps in which lhs_id == rhs_id
+       bool avoid_symmetric, // ignore overlaps in which lhs_id > rhs_id
+       bool minhash = false, // only lhs
+       bool hpc = false,     // use homopolymer compression
+       std::vector<std::uint32_t> *filtered = nullptr) const;
 
-  // find overlaps between a pair of sequences
-  std::vector<biosoup::Overlap> Map(
-      const std::unique_ptr<biosoup::NucleicAcid>& lhs,
-      const std::unique_ptr<biosoup::NucleicAcid>& rhs,
-      bool minhash = false,  // only lhs
-      bool hpc = false) const;
+   // find overlaps between a pair of sequences
+   std::vector<biosoup::Overlap> Map(
+       const std::unique_ptr<biosoup::NucleicAcid> &lhs,
+       const std::unique_ptr<biosoup::NucleicAcid> &rhs,
+       bool minhash = false, // only lhs
+       bool hpc = false) const;
 
  private:
   struct Kmer {

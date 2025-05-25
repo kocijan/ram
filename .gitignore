@@ -1,3 +1,4 @@
 # Compiled Object files
 build/
 test/data/sample.fasta
+test/out
