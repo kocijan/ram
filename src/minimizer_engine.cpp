@@ -624,9 +624,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
   std::uint32_t max_iter = 5000;           // Max iterations
   int32_t min_cnt = chain_;                // Min anchors in chain, use existing parameter
   int32_t min_sc = matches_;               // Min score required, use existing parameter
-  float chain_gap_scale = 0.008f * k_;     // Gap cost scale
-  float chain_skip_scale = 0.000f * k_;    // Skip cost scale
   int32_t max_drop = dp_bandwidth;         // Max score drop
+  float bandwidth_threshold = 0.05f;       // Threshold for bandwidth
+  float bandwidth_penalty = 1.0 / bandwidth_threshold; // Penalty for exceeding bandwidth
 
   if (matches.empty())
   {
@@ -648,7 +648,6 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
 
   std::vector<biosoup::Overlap> overlaps;
 
-  // Skip interval identification and process all matches together
   // Check if we have enough matches to form a chain
   if (matches.size() - 1 < static_cast<std::size_t>(min_cnt))
   {
@@ -666,15 +665,14 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
 
   // Convert matches to anchors for DP
   std::vector<std::pair<std::uint32_t, std::uint32_t>> anchors;
+  std::vector<std::int32_t> anchor_frequencies;
   for (std::size_t k = 0; k < matches.size() - 1; ++k)
   {
-    // Only include matches with the same strand orientation
-    if (matches[k].strand() == strand)
-    {
-      anchors.emplace_back(
-          matches[k].rhs_position(),
-          matches[k].lhs_position());
-    }
+    anchors.emplace_back(
+        matches[k].rhs_position(),
+        matches[k].lhs_position());
+    // TODO - extract actual k-mer frequency, using a placeholder for now
+    anchor_frequencies.emplace_back(1);
   }
 
   int64_t n_a = anchors.size();
@@ -686,14 +684,19 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
   // Allocate memory for DP arrays
   std::vector<int32_t> f(n_a);     // Score array
   std::vector<int64_t> p(n_a, -1); // Predecessor array
-  std::vector<int32_t> t(n_a, 0);  // Temporary array for backtracking
+  std::vector<int64_t> indels(n_a, 0);      // Cumulative indel counts
+  std::vector<int64_t> self_length(n_a, 0); // Cumulative self lengths
+  std::vector<int32_t> t(n_a, -1);          // Temporary array for backtracking
 
   // Fill the score and backtrack arrays
   for (int64_t a_i = 0, st = 0; a_i < n_a; ++a_i)
   {
     int64_t max_j = -1;
-    int32_t max_f = 1; // Default score for a single anchor
-    uint32_t n_skip = 0;
+    uint32_t n_chn_skip = 0;
+    uint32_t n_max_skip = 0;
+    int64_t max_indels = 0;
+    int64_t max_self_length = 0;
+    int32_t max_score = (int32_t)k_ >= anchor_frequencies[a_i] ? (int32_t)k_ / anchor_frequencies[a_i] : 1; // Normalize by frequency
 
     // Find appropriate starting point
     while (st < a_i && (anchors[a_i].first - anchors[st].first > max_dist_x))
@@ -710,32 +713,63 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
     // DP calculation - find best predecessor
     for (int64_t a_j = a_i - 1; a_j >= st; --a_j)
     {
-      int32_t sc = ComputeDPScore(
-          anchors[a_i], anchors[a_j],
-          max_dist_x, max_dist_y,
-          dp_bandwidth, chain_gap_scale,
-          chain_skip_scale);
-
-      if (sc == std::numeric_limits<int32_t>::min())
+      int64_t distance_pos = anchors[a_i].first - anchors[a_j].first;
+      int64_t distance_self_pos = anchors[a_i].second - anchors[a_j].second;
+      // Skip invalid transitions
+      if (distance_pos > max_dist_x || distance_self_pos > max_dist_y)
       {
         continue;
       }
-
-      sc += f[a_j];
-      if (sc > max_f)
+      if (distance_pos <= 0 || distance_self_pos <= 0)
       {
-        max_f = sc;
+        continue;
+      }
+      // Calculate gap and cumulative values
+      int64_t distance_gap = std::abs(distance_self_pos - distance_pos);
+      int64_t total_indels = indels[a_j] + distance_gap;
+      int64_t total_self_length = self_length[a_j] + distance_self_pos;
+      // Check bandwidth constraints
+      if (total_indels > bandwidth_threshold * total_self_length)
+      {
+        continue;
+      }
+      // Calculate score
+      int64_t distance_min = std::min(distance_self_pos, distance_pos);
+      int32_t score = std::min(
+          (int64_t)k_,
+          distance_min);
+      score = score >= anchor_frequencies[a_j] ? score / anchor_frequencies[a_j] : 1; // Normalize by frequency
+
+      // Apply gap rate penalty
+      float gap_rate = total_indels / static_cast<float>(total_self_length);
+      score -= (int32_t)(gap_rate * score * bandwidth_penalty);
+
+      score += f[a_j]; // Add predecessor score
+
+      if (score > max_score)
+      {
+        max_score = score;
         max_j = a_j;
-        if (n_skip > 0)
+        max_indels = total_indels;
+        max_self_length = total_self_length;
+        n_max_skip = 0;
+        if (n_chn_skip > 0)
         {
-          --n_skip;
+          --n_chn_skip;
         }
       }
-      else if (t[a_j] == a_i)
+      else
       {
-        if (++n_skip > max_skip)
+        if (++n_max_skip > max_skip)
         {
           break;
+        }
+        if (t[a_j] == a_i)
+        {
+          if (++n_chn_skip > max_skip)
+          {
+            break;
+          }
         }
       }
 
@@ -746,8 +780,10 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
     }
 
     // Set score and predecessor
-    f[a_i] = max_f;
+    f[a_i] = max_score;
     p[a_i] = max_j;
+    indels[a_i] = max_indels;
+    self_length[a_i] = max_self_length;
   }
 
   // Backtrack to find chains - process by score (highest to lowest)
