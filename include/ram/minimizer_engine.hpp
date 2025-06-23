@@ -17,7 +17,7 @@ namespace ram {
 
 class MinimizerEngine {
  public:
-   MinimizerEngine(
+   MinimizerEngine( // also change defaults in main.cpp?
        std::shared_ptr<thread_pool::ThreadPool> thread_pool = nullptr,
        std::uint32_t k = 51, // element of [1, 63]
        std::uint32_t w = 5,
@@ -189,16 +189,6 @@ class MinimizerEngine {
   std::vector<biosoup::Overlap> ChainDP(
       std::uint64_t lhs_id,
       std::vector<Match> &&matches) const;
-
-  // Helper function for ChainDP to compute score between two anchors
-  int32_t ComputeDPScore(
-      const std::pair<std::uint32_t, std::uint32_t> &ai,
-      const std::pair<std::uint32_t, std::uint32_t> &aj,
-      std::uint32_t max_dist_x,
-      std::uint32_t max_dist_y,
-      std::uint32_t bandwidth,
-      float chain_gap_scale,
-      float chain_skip_scale) const;
 
   // Helper function for ChainDP to backtrack through chains
   static std::vector<std::uint64_t> BacktrackDP(
