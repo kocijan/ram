@@ -237,14 +237,15 @@ int main(int argc, char** argv) {
         break;
       }
 
-      std::vector<std::future<std::vector<biosoup::Overlap>>> futures;
+      std::vector<std::future<std::vector<ram::Overlap>>> futures;
       for (const auto& it : sequences) {
         if (is_ava && it->id >= num_targets) {
           continue;
         }
         futures.emplace_back(thread_pool->Submit(
-            [&] (const std::unique_ptr<biosoup::NucleicAcid>& sequence)
-                -> std::vector<biosoup::Overlap> {
+            [&](const std::unique_ptr<biosoup::NucleicAcid> &sequence)
+                -> std::vector<ram::Overlap>
+            {
               return minimizer_engine.Map(sequence, is_ava, is_ava, minhash, hpc);
             },
             std::ref(it)));
@@ -268,9 +269,10 @@ int main(int argc, char** argv) {
                     << jt.rhs_end << "\t"
                     << jt.score << "\t"
                     << std::max(
-                          jt.lhs_end - jt.lhs_begin,
-                          jt.rhs_end - jt.rhs_begin) << "\t"
-                    << 255
+                           jt.lhs_end - jt.lhs_begin,
+                           jt.rhs_end - jt.rhs_begin)
+                    << "\t"
+                    << jt.dp_score
                     << std::endl;
         }
 

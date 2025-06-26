@@ -186,16 +186,17 @@ void MinimizerEngine::Filter(double frequency) {
   occurrence_ = occurrences[(1 - frequency) * occurrences.size()] + 1;
 }
 
-std::vector<biosoup::Overlap> MinimizerEngine::Map(
-    const std::unique_ptr<biosoup::NucleicAcid>& sequence,
+std::vector<ram::Overlap> MinimizerEngine::Map(
+    const std::unique_ptr<biosoup::NucleicAcid> &sequence,
     bool avoid_equal,
     bool avoid_symmetric,
     bool minhash,
     bool hpc,
-    std::vector<std::uint32_t>* filtered) const {
+    std::vector<std::uint32_t> *filtered) const
+{
   auto sketch = Minimize(sequence, minhash, hpc);
   if (sketch.empty()) {
-    return std::vector<biosoup::Overlap>{};
+    return std::vector<ram::Overlap>{};
   }
 
   std::vector<Match> matches;
@@ -280,7 +281,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   }
 
   // Group matches by (rhs_id, strand) pairs and call ChainDP separately
-  std::vector<biosoup::Overlap> all_overlaps;
+  std::vector<ram::Overlap> all_overlaps;
 
   if (!matches.empty())
   {
@@ -321,20 +322,21 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   return all_overlaps;
 }
 
-std::vector<biosoup::Overlap> MinimizerEngine::Map(
-    const std::unique_ptr<biosoup::NucleicAcid>& lhs,
-    const std::unique_ptr<biosoup::NucleicAcid>& rhs,
+std::vector<ram::Overlap> MinimizerEngine::Map(
+    const std::unique_ptr<biosoup::NucleicAcid> &lhs,
+    const std::unique_ptr<biosoup::NucleicAcid> &rhs,
     bool minhash,
-    bool hpc) const {
+    bool hpc) const
+{
 
   auto lhs_sketch = Minimize(lhs, minhash, hpc);
   if (lhs_sketch.empty()) {
-    return std::vector<biosoup::Overlap>{};
+    return std::vector<ram::Overlap>{};
   }
 
   auto rhs_sketch = Minimize(rhs, minhash, hpc);
   if (rhs_sketch.empty()) {
-    return std::vector<biosoup::Overlap>{};
+    return std::vector<ram::Overlap>{};
   }
 
   RadixSort(lhs_sketch.begin(), lhs_sketch.end(), 62U, Kmer::SortByValue);
@@ -376,7 +378,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   }
 
   // Group matches by (rhs_id, strand) pairs and call ChainDP separately
-  std::vector<biosoup::Overlap> all_overlaps;
+  std::vector<ram::Overlap> all_overlaps;
 
   if (!matches.empty())
   {
@@ -417,9 +419,10 @@ std::vector<biosoup::Overlap> MinimizerEngine::Map(
   return all_overlaps;
 }
 
-std::vector<biosoup::Overlap> MinimizerEngine::Chain(
+std::vector<ram::Overlap> MinimizerEngine::Chain(
     std::uint64_t lhs_id,
-    std::vector<Match>&& matches) const {
+    std::vector<Match> &&matches) const
+{
   RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
   matches.emplace_back(-1, -1, -1);  // stop dummy
 
@@ -446,7 +449,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
     }
   }
 
-  std::vector<biosoup::Overlap> dst;
+  std::vector<ram::Overlap> dst;
   for (const auto& it : intervals) {
     std::uint64_t j = it.first;
     std::uint64_t i = it.second;
@@ -531,16 +534,13 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
         dst.emplace_back(
             lhs_id,
             first.lhs_position(),
-             last.lhs_position() + last.lhs_span(),
+            last.lhs_position() + last.lhs_span(),
             matches[j].rhs_id(),
-            strand ?
-                first.rhs_position() :
-                 last.rhs_position(),
-            strand ?
-                 last.rhs_position() +  last.rhs_span() :
-                first.rhs_position() + first.rhs_span(),
+            strand ? first.rhs_position() : last.rhs_position(),
+            strand ? last.rhs_position() + last.rhs_span() : first.rhs_position() + first.rhs_span(),
             std::min(lhs_matches, rhs_matches),
-            strand);
+            strand,
+            0); // dp_score = 0 for LIS-based chaining
 
         l = k;
       }
@@ -549,22 +549,8 @@ std::vector<biosoup::Overlap> MinimizerEngine::Chain(
   return dst;
 }
 
-static inline float log2f(float x) // NB: this doesn't work when x<2
-{
-  union
-  {
-    float f;
-    uint32_t i;
-  } z = {x};
-  float log_2 = ((z.i >> 23) & 255) - 128;
-  z.i &= ~(255 << 23);
-  z.i += 127 << 23;
-  log_2 += (-0.34484843f * z.f + 2.02466578f) * z.f - 0.67487759f;
-  return log_2;
-}
-
 // New DP-based chaining function with same signature as Chain
-std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
+std::vector<ram::Overlap> MinimizerEngine::ChainDP(
     std::uint64_t lhs_id,
     std::vector<Match> &&matches) const
 {
@@ -582,7 +568,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
 
   if (matches.empty())
   {
-    return std::vector<biosoup::Overlap>{};
+    return std::vector<ram::Overlap>{};
   }
 
   if (max_dist_x < dp_bandwidth)
@@ -597,7 +583,7 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
   // Sort matches by group (to identify strands)
   RadixSort(matches.begin(), matches.end(), 64, Match::SortByGroup);
 
-  std::vector<biosoup::Overlap> overlaps;
+  std::vector<ram::Overlap> overlaps;
 
   // Check if we have enough matches to form a chain
   if (matches.size() - 1 < static_cast<std::size_t>(min_cnt))
@@ -862,6 +848,9 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
     const auto &first_match = matches[chain.front()];
     const auto &last_match = matches[chain.back()];
 
+    // Get dp_score from the last element of the chain (which is the first when we built it backwards)
+    int32_t chain_dp_score = strand ? f[chain.back()] : f[chain.front()];
+
     overlaps.emplace_back(
         lhs_id,
         first_match.lhs_position(),
@@ -870,7 +859,8 @@ std::vector<biosoup::Overlap> MinimizerEngine::ChainDP(
         strand ? first_match.rhs_position() : last_match.rhs_position(),
         strand ? last_match.rhs_position() + last_match.rhs_span() : first_match.rhs_position() + first_match.rhs_span(),
         std::min(lhs_matches, rhs_matches),
-        strand);
+        strand,
+        chain_dp_score);
 
     prev_matches = current_matches;
   }

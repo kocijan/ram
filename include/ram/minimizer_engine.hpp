@@ -15,6 +15,23 @@
 
 namespace ram {
 
+  // Extended Overlap struct with DP score
+  struct Overlap : public biosoup::Overlap
+  {
+    Overlap() = default;
+
+    Overlap(
+        std::uint32_t lhs_id, std::uint32_t lhs_begin, std::uint32_t lhs_end,
+        std::uint32_t rhs_id, std::uint32_t rhs_begin, std::uint32_t rhs_end,
+        std::uint32_t score,
+        bool strand,
+        int32_t dp_score)
+        : biosoup::Overlap(lhs_id, lhs_begin, lhs_end, rhs_id, rhs_begin, rhs_end, score, strand),
+          dp_score(dp_score) {}
+
+    int32_t dp_score = 0;
+  };
+
 class MinimizerEngine {
  public:
    MinimizerEngine( // also change defaults in main.cpp?
@@ -46,7 +63,7 @@ class MinimizerEngine {
    void Filter(double frequency);
 
    // find overlaps in preconstructed minimizer index
-   std::vector<biosoup::Overlap> Map(
+   std::vector<ram::Overlap> Map(
        const std::unique_ptr<biosoup::NucleicAcid> &sequence,
        bool avoid_equal,     // ignore overlaps in which lhs_id == rhs_id
        bool avoid_symmetric, // ignore overlaps in which lhs_id > rhs_id
@@ -55,7 +72,7 @@ class MinimizerEngine {
        std::vector<std::uint32_t> *filtered = nullptr) const;
 
    // find overlaps between a pair of sequences
-   std::vector<biosoup::Overlap> Map(
+   std::vector<ram::Overlap> Map(
        const std::unique_ptr<biosoup::NucleicAcid> &lhs,
        const std::unique_ptr<biosoup::NucleicAcid> &rhs,
        bool minhash = false, // only lhs
@@ -181,12 +198,12 @@ class MinimizerEngine {
       bool minhash = false,
       bool hpc = false) const;
 
-  std::vector<biosoup::Overlap> Chain(
+  std::vector<ram::Overlap> Chain(
       std::uint64_t lhs_id,
-      std::vector<Match>&& matches) const;
+      std::vector<Match> &&matches) const;
 
   // New DP-based chaining function to replace/supplement the LIS-based Chain
-  std::vector<biosoup::Overlap> ChainDP(
+  std::vector<ram::Overlap> ChainDP(
       std::uint64_t lhs_id,
       std::vector<Match> &&matches) const;
 
