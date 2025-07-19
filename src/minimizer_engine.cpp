@@ -5,43 +5,49 @@
 #include <deque>
 #include <stdexcept>
 #include <iostream>
+#include <iomanip>
+#include <cmath>
+#include "biosoup/timer.hpp"
+#include "biosoup/progress_bar.hpp"
 
 namespace ram {
 
-MinimizerEngine::MinimizerEngine(
-    std::shared_ptr<thread_pool::ThreadPool> thread_pool,
-    std::uint32_t k,
-    std::uint32_t w,
-    std::uint32_t bandwidth,
-    std::uint32_t chain,
-    std::uint32_t matches,
-    std::uint32_t gap)
-    : k_(std::min(std::max(k, 1U), 63U)),
-      w_(w),
-      bandwidth_(bandwidth),
-      chain_(chain),
-      matches_(matches),
-      gap_(gap),
-      occurrence_(-1),
-      index_(1U << std::min(14U, 2 * k_)),
-      thread_pool_(thread_pool ?
-          thread_pool :
-          std::make_shared<thread_pool::ThreadPool>(1)) {}
+  MinimizerEngine::MinimizerEngine(
+      std::shared_ptr<thread_pool::ThreadPool> thread_pool,
+      std::uint32_t k,
+      std::uint32_t w,
+      std::uint32_t bandwidth,
+      std::uint32_t chain,
+      std::uint32_t matches,
+      std::uint32_t gap)
+      : k_(std::min(std::max(k, 1U), 63U)),
+        w_(w),
+        bandwidth_(bandwidth),
+        chain_(chain),
+        matches_(matches),
+        gap_(gap),
+        occurrence_(-1),
+        kmer_frequency_cutoff_(0),
+        index_(1U << std::min(14U, 2 * k_)),
+        thread_pool_(thread_pool ? thread_pool : std::make_shared<thread_pool::ThreadPool>(1)) {}
 
-std::uint32_t MinimizerEngine::Index::Find(
-    std::uint64_t key,
-    const Kmer** dst) const {
-  auto it = locator.find(key << 1);
-  if (it == locator.end()) {
-    return 0;
+  std::uint32_t MinimizerEngine::Index::Find(
+      std::uint64_t key,
+      const Kmer **dst) const
+  {
+    auto it = locator.find(key << 1);
+    if (it == locator.end())
+    {
+      return 0;
+    }
+    if (it->first & 1)
+    {
+      *dst = &(it->second);
+      return 1;
+    }
+    *dst = &(kmers[it->second.origin >> 32]);
+    return static_cast<std::uint32_t>(it->second.origin);
   }
-  if (it->first & 1) {
-    *dst = &(it->second);
-    return 1;
-  }
-  *dst = &(kmers[it->second.origin >> 32]);
-  return static_cast<std::uint32_t>(it->second.origin);
-}
 
 void MinimizerEngine::Minimize(
     std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
@@ -58,20 +64,64 @@ void MinimizerEngine::Minimize(
     return;
   }
 
+  biosoup::Timer timer{};
+
+  // Step 1: Count k-mers in all sequences
+  std::cerr << "[ram::MinimizerEngine::Minimize] counting k-mers..." << std::endl;
+  timer.Start();
+
+  kmer_frequencies_ = CountKmers(first, last, hpc);
+
+  std::cerr << "[ram::MinimizerEngine::Minimize] counted " << kmer_frequencies_.size()
+            << " unique k-mers " << std::fixed << timer.Stop() << "s" << std::endl;
+
+  // Step 2: Estimate cutoff for frequent k-mers (use same logic as existing Filter)
+  timer.Start();
+  std::cerr << "[ram::MinimizerEngine::Minimize] calculating frequency cutoff..." << std::endl;
+
+  if (!kmer_frequencies_.empty())
+  {
+    std::vector<std::uint32_t> counts;
+    counts.reserve(kmer_frequencies_.size());
+    for (const auto &kv : kmer_frequencies_)
+    {
+      counts.push_back(kv.second);
+    }
+
+    // Use 0.001 as default frequency threshold for k-mer filtering
+    double kmer_frequency_threshold = 0.01;
+    std::nth_element(
+        counts.begin(),
+        counts.begin() + (1 - kmer_frequency_threshold) * counts.size(),
+        counts.end());
+    kmer_frequency_cutoff_ = counts[(1 - kmer_frequency_threshold) * counts.size()] + 1;
+  }
+
+  std::cerr << "[ram::MinimizerEngine::Minimize] frequency cutoff: " << kmer_frequency_cutoff_
+            << " " << std::fixed << timer.Stop() << "s" << std::endl;
+
+  // Step 3: Generate minimizers with frequency filtering
+  timer.Start();
+  std::cerr << "[ram::MinimizerEngine::Minimize] generating minimizers..." << std::endl;
+
   std::vector<std::vector<Kmer>> minimizers(index_.size());
   {
     std::uint64_t mask = index_.size() - 1;
+    auto first_copy = first;
 
-    while (first != last) {
+    while (first_copy != last)
+    {
       std::size_t batch_size = 0;
       std::vector<std::future<std::vector<Kmer>>> futures;
-      for (; first != last && batch_size < 50000000; ++first) {
-        batch_size += (*first)->inflated_len;
+      for (; first_copy != last && batch_size < 50000000; ++first_copy)
+      {
+        batch_size += (*first_copy)->inflated_len;
         futures.emplace_back(thread_pool_->Submit(
-            [&] (decltype(first) it) -> std::vector<Kmer> {
-              return Minimize(*it, minhash, hpc);
+            [&](decltype(first_copy) it) -> std::vector<Kmer>
+            {
+              return Minimize(*it, minhash, hpc, &kmer_frequencies_, kmer_frequency_cutoff_);
             },
-            first));
+            first_copy));
       }
       for (auto& it : futures) {
         for (const auto& jt : it.get()) {
@@ -84,6 +134,13 @@ void MinimizerEngine::Minimize(
       }
     }
   }
+
+  std::cerr << "[ram::MinimizerEngine::Minimize] generated minimizers "
+            << std::fixed << timer.Stop() << "s" << std::endl;
+
+  // Step 4: Build index
+  timer.Start();
+  std::cerr << "[ram::MinimizerEngine::Minimize] building index..." << std::endl;
 
   {
     std::vector<std::future<std::pair<std::size_t, std::size_t>>> futures;
@@ -150,6 +207,9 @@ void MinimizerEngine::Minimize(
       std::vector<Kmer>().swap(minimizers[i]);
     }
   }
+
+  std::cerr << "[ram::MinimizerEngine::Minimize] built index "
+            << std::fixed << timer.Stop() << "s" << std::endl;
 }
 
 void MinimizerEngine::Filter(double frequency) {
@@ -222,7 +282,8 @@ std::vector<ram::Overlap> MinimizerEngine::Map(
     matches.emplace_back(
         (((rhs_id << 1) | strand_) << 32) | diagonal,
         (lhs_pos << 32) | rhs_pos,
-        (lhs_span << 8) | rhs_span);
+        (lhs_span << 8) | rhs_span,
+        kmer.value()); // Store k-mer hash
   };
 
   struct Hit {
@@ -368,7 +429,8 @@ std::vector<ram::Overlap> MinimizerEngine::Map(
           matches.emplace_back(
               (((rhs_id << 1) | strand) << 32) | diagonal,
               (lhs_pos << 32) | rhs_pos,
-              (lhs_span << 8) | rhs_span);
+              (lhs_span << 8) | rhs_span,
+              lhs_sketch[i].value()); // Store k-mer hash from lhs
         }
         break;
       } else {
@@ -609,8 +671,20 @@ std::vector<ram::Overlap> MinimizerEngine::ChainDP(
     anchors.emplace_back(
         matches[k].rhs_position(),
         matches[k].lhs_position());
-    // TODO - extract actual k-mer frequency, using a placeholder for now
-    anchor_frequencies.emplace_back(1);
+
+    // Extract actual k-mer frequency from the stored k-mer hash
+    std::int32_t frequency = 1; // Default frequency
+
+    if (!kmer_frequencies_.empty())
+    {
+      auto it = kmer_frequencies_.find(matches[k].kmer_hash);
+      if (it != kmer_frequencies_.end())
+      {
+        frequency = static_cast<std::int32_t>(it->second);
+      }
+    }
+
+    anchor_frequencies.emplace_back(frequency);
   }
 
   int64_t n_a = anchors.size();
@@ -868,10 +942,311 @@ std::vector<ram::Overlap> MinimizerEngine::ChainDP(
   return overlaps;
 }
 
+MinimizerEngine::KmerFrequencyTable MinimizerEngine::CountKmers(
+    std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
+    std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
+    bool hpc) const
+{
+  std::uint64_t total_sequences = std::distance(first, last);
+
+  // Process only 10sqrt(n) reads for faster k-mer frequency estimation
+  std::uint64_t sample_size = static_cast<std::uint64_t>(std::sqrt(total_sequences) * 10.);
+  sample_size = std::max(sample_size, static_cast<std::uint64_t>(1)); // Ensure at least 1 sequence
+  sample_size = std::min(sample_size, total_sequences);               // Don't exceed total
+
+  std::cerr << "[ram::MinimizerEngine::CountKmers] processing " << sample_size
+            << " out of " << total_sequences << " sequences (sqrt sampling)" << std::endl;
+
+  // Pre-allocate with estimated size to reduce rehashing
+  KmerFrequencyTable frequency_table;
+  frequency_table.reserve(sample_size * 1000); // Reduced estimate based on sample size
+
+  std::uint64_t processed_sequences = 0;
+  std::uint64_t next_milestone = sample_size / 10;
+  if (next_milestone == 0)
+    next_milestone = 1;
+
+  biosoup::Timer timer{};
+  timer.Start();
+
+  // Calculate step size for even distribution
+  std::uint64_t step = total_sequences / sample_size;
+  if (step == 0)
+    step = 1;
+
+  // Use fixed batch size based on sample count rather than total count
+  const std::uint64_t batch_size = std::max(static_cast<std::uint64_t>(1), sample_size / (thread_pool_->num_threads() * 4));
+
+  auto current_it = first;
+  std::uint64_t sequences_processed = 0;
+
+  while (sequences_processed < sample_size && current_it != last)
+  {
+    std::vector<std::future<KmerFrequencyTable>> futures;
+
+    // Create batches with sampled sequences
+    for (std::uint32_t i = 0; i < thread_pool_->num_threads() && sequences_processed < sample_size; ++i)
+    {
+      std::vector<std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator> batch_sequences;
+      std::uint64_t sequences_in_batch = std::min(batch_size, sample_size - sequences_processed);
+
+      // Collect sequences for this batch using step sampling
+      for (std::uint64_t j = 0; j < sequences_in_batch && current_it != last; ++j)
+      {
+        batch_sequences.push_back(current_it);
+
+        // Advance by step size for even distribution
+        for (std::uint64_t k = 0; k < step && current_it != last; ++k)
+        {
+          ++current_it;
+        }
+      }
+
+      if (!batch_sequences.empty())
+      {
+        futures.emplace_back(thread_pool_->Submit(
+            [this, hpc](std::vector<std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator> batch_seqs) -> KmerFrequencyTable
+            {
+              KmerFrequencyTable local_table;
+              // Pre-allocate based on expected k-mers per sequence
+              local_table.reserve(batch_seqs.size() * 1000);
+
+              for (auto seq_it : batch_seqs)
+              {
+                CountKmersInSequence(*seq_it, local_table, hpc);
+              }
+              return local_table;
+            },
+            batch_sequences));
+
+        sequences_processed += batch_sequences.size();
+      }
+    }
+
+    // Collect results and merge sequentially to avoid contention
+    std::vector<KmerFrequencyTable> local_results;
+    local_results.reserve(futures.size());
+
+    for (auto &future : futures)
+    {
+      local_results.emplace_back(future.get());
+    }
+
+    // Sequential merge to avoid hash table contention
+    for (const auto &local_table : local_results)
+    {
+      for (const auto &kv : local_table)
+      {
+        frequency_table[kv.first] += kv.second;
+      }
+    }
+
+    processed_sequences = sequences_processed;
+
+    // Progress reporting
+    if (processed_sequences >= next_milestone || processed_sequences >= sample_size)
+    {
+      double progress = (double)processed_sequences / sample_size * 100.0;
+      std::cerr << "[ram::MinimizerEngine::CountKmers] processed " << processed_sequences
+                << "/" << sample_size << " sequences (" << std::fixed << std::setprecision(1)
+                << progress << "%) " << std::fixed << std::setprecision(3) << timer.Lap() << "s" << std::endl;
+
+      next_milestone += sample_size / 10;
+      if (next_milestone > sample_size)
+      {
+        next_milestone = sample_size;
+      }
+    }
+  }
+
+  std::cerr << "[ram::MinimizerEngine::CountKmers] completed k-mer counting on " << processed_sequences
+            << " sequences " << std::fixed << timer.Stop() << "s" << std::endl;
+
+  // Print histogram of k-mer frequencies
+  if (!frequency_table.empty())
+  {
+    std::cerr << "\n[ram::MinimizerEngine::CountKmers] K-mer Frequency Distribution:" << std::endl;
+    std::cerr << "============================================================" << std::endl;
+
+    // Count how many k-mers have each frequency (1 to 100)
+    std::vector<std::uint64_t> histogram(101, 0); // Index 0 unused, 1-100 for frequencies
+    std::uint64_t max_frequency = 0;
+    std::uint64_t total_kmers = 0;
+
+    for (const auto &kv : frequency_table)
+    {
+      std::uint32_t freq = kv.second;
+      max_frequency = std::max(max_frequency, static_cast<std::uint64_t>(freq));
+      total_kmers++;
+
+      if (freq <= 100)
+      {
+        histogram[freq]++;
+      }
+    }
+
+    std::cerr << "Total unique k-mers: " << total_kmers << std::endl;
+    std::cerr << "Maximum frequency: " << max_frequency << std::endl;
+    std::cerr << "\nFrequency Distribution (top 100):" << std::endl;
+    std::cerr << "Freq | Count    | Percentage | Histogram" << std::endl;
+    std::cerr << "-----|----------|------------|--------------------------------------------------" << std::endl;
+
+    // Find max count for scaling the histogram bars
+    std::uint64_t max_count = *std::max_element(histogram.begin() + 1, histogram.end());
+    const int bar_width = 40;
+
+    for (int freq = 1; freq <= 100; ++freq)
+    {
+      if (histogram[freq] > 0)
+      {
+        double percentage = (double)histogram[freq] / total_kmers * 100.0;
+        int bar_length = max_count > 0 ? (int)((double)histogram[freq] / max_count * bar_width) : 0;
+
+        std::cerr << std::setw(4) << freq << " | "
+                  << std::setw(8) << histogram[freq] << " | "
+                  << std::setw(9) << std::fixed << std::setprecision(3) << percentage << "% | ";
+
+        // Draw histogram bar
+        for (int i = 0; i < bar_length; ++i)
+        {
+          std::cerr << "█";
+        }
+        std::cerr << std::endl;
+      }
+    }
+
+    // Count k-mers with frequency > 100
+    std::uint64_t high_freq_count = 0;
+    for (const auto &kv : frequency_table)
+    {
+      if (kv.second > 100)
+      {
+        high_freq_count++;
+      }
+    }
+
+    if (high_freq_count > 0)
+    {
+      double percentage = (double)high_freq_count / total_kmers * 100.0;
+      std::cerr << ">100 | " << std::setw(8) << high_freq_count << " | "
+                << std::setw(9) << std::fixed << std::setprecision(3) << percentage << "% | "
+                << "(frequencies > 100)" << std::endl;
+    }
+
+    std::cerr << "============================================================" << std::endl;
+
+    // Print some summary statistics
+    std::uint64_t singletons = histogram[1];
+    std::uint64_t doubletons = histogram[2];
+    double singleton_rate = (double)singletons / total_kmers * 100.0;
+    double doubleton_rate = (double)doubletons / total_kmers * 100.0;
+
+    std::cerr << "\nSummary Statistics:" << std::endl;
+    std::cerr << "- Singletons (freq=1): " << singletons << " ("
+              << std::fixed << std::setprecision(1) << singleton_rate << "%)" << std::endl;
+    std::cerr << "- Doubletons (freq=2): " << doubletons << " ("
+              << std::fixed << std::setprecision(1) << doubleton_rate << "%)" << std::endl;
+    std::cerr << "- High frequency (>100): " << high_freq_count << " ("
+              << std::fixed << std::setprecision(1) << (double)high_freq_count / total_kmers * 100.0 << "%)" << std::endl;
+    std::cerr << std::endl;
+  }
+
+  return frequency_table;
+}
+
+void MinimizerEngine::CountKmersInSequence(
+    const std::unique_ptr<biosoup::NucleicAcid> &sequence,
+    KmerFrequencyTable &frequency_table,
+    bool hpc) const
+{
+  if (sequence->inflated_len < k_)
+  {
+    return;
+  }
+
+  std::uint64_t mask = (1ULL << k_) - 1;
+
+  // Use same hash function as in Minimize
+  auto hash = [&](std::uint64_t key) -> std::uint64_t
+  {
+    key = ~key + (key << 21);
+    key = key ^ key >> 24;
+    key = (key + (key << 3)) + (key << 8);
+    key = key ^ key >> 14;
+    key = (key + (key << 2)) + (key << 4);
+    key = key ^ key >> 28;
+    key = key + (key << 31);
+    return key;
+  };
+
+  std::uint64_t minimizer_lo = 0;
+  std::uint64_t minimizer_hi = 0;
+  std::uint64_t reverse_minimizer_lo = 0;
+  std::uint64_t reverse_minimizer_hi = 0;
+  std::uint64_t shift = k_ - 1;
+
+  // Pre-increment frequency_table load factor to reduce rehashing
+  frequency_table.reserve(frequency_table.size() + sequence->inflated_len / k_);
+
+  for (std::uint32_t i = 0, kmer_span = 0, base_cnt = 0; i < sequence->inflated_len; ++i, ++kmer_span)
+  {
+    std::uint64_t c = sequence->Code(i);
+
+    // skip homopolymer
+    if (hpc && i && sequence->Code(i - 1) == c)
+    {
+      continue;
+    }
+    // found new char
+    base_cnt++;
+
+    // remove last from kmer
+    if (base_cnt > k_)
+    {
+      kmer_span--;
+      if (hpc)
+      {
+        auto last_c = sequence->Code(i - kmer_span - 1);
+        while (sequence->Code(i - kmer_span) == last_c)
+          kmer_span--;
+      }
+    }
+
+    minimizer_lo = ((minimizer_lo << 1) | (c & 1)) & mask;
+    minimizer_hi = ((minimizer_hi << 1) | (c & 2)) & mask;
+    reverse_minimizer_lo = (reverse_minimizer_lo >> 1) | (((c ^ 3) & 1) << shift);
+    reverse_minimizer_hi = (reverse_minimizer_hi >> 1) | (((c ^ 3) & 2) << shift);
+
+    if (base_cnt >= k_ && kmer_span < 256ULL)
+    {
+      // Count k-mer using same hash combination as in Minimize
+      std::uint64_t kmer_hash;
+      if (minimizer_hi < reverse_minimizer_hi)
+      {
+        kmer_hash = hash(minimizer_lo) + hash(minimizer_hi);
+      }
+      else if (minimizer_hi > reverse_minimizer_hi)
+      {
+        kmer_hash = hash(reverse_minimizer_lo) + hash(reverse_minimizer_hi);
+      }
+      else
+      {
+        continue; // Skip palindromic k-mers
+      }
+
+      ++frequency_table[kmer_hash]; // Use pre-increment for slight performance gain
+    }
+  }
+}
+
 std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
-    const std::unique_ptr<biosoup::NucleicAcid>& sequence,
+    const std::unique_ptr<biosoup::NucleicAcid> &sequence,
     bool minhash,
-    bool hpc) const {
+    bool hpc,
+    const KmerFrequencyTable *frequency_table,
+    std::uint32_t frequency_cutoff) const
+{
+
   if (sequence->inflated_len < k_) {
     return std::vector<Kmer>{};
   }
@@ -890,12 +1265,60 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
   };
 
   std::deque<Kmer> window;
-  auto window_add = [&] (std::uint64_t description, std::uint64_t origin) -> void {
-    while (!window.empty() && window.back().value() > (description >> 8)) {
-      window.pop_back();
+  auto window_add = [&](std::uint64_t description, std::uint64_t origin) -> void
+  {
+    // Check frequency filter if provided
+    if (frequency_table && frequency_cutoff > 0)
+    {
+      std::uint64_t kmer_hash = description >> 8;
+      auto it = frequency_table->find(kmer_hash);
+      if (it != frequency_table->end() && it->second >= frequency_cutoff)
+      {
+        return; // Skip this k-mer as it's too frequent
+      }
+    }
+
+    // Get frequency for new k-mer
+    std::uint64_t new_kmer_hash = description >> 8;
+    std::uint32_t new_frequency = 1;
+    if (frequency_table)
+    {
+      auto it = frequency_table->find(new_kmer_hash);
+      if (it != frequency_table->end())
+      {
+        new_frequency = it->second;
+      }
+    }
+
+    // Compare with window back based on frequency (keep less frequent k-mers)
+    while (!window.empty())
+    {
+      std::uint64_t window_kmer_hash = window.back().value();
+      std::uint32_t window_frequency = 1;
+      if (frequency_table)
+      {
+        auto it = frequency_table->find(window_kmer_hash);
+        if (it != frequency_table->end())
+        {
+          window_frequency = it->second;
+        }
+      }
+
+      // If new k-mer is less frequent (lower frequency count), remove window back
+      // If frequencies are equal, fall back to hash comparison
+      if (new_frequency < window_frequency ||
+          (new_frequency == window_frequency && new_kmer_hash < window_kmer_hash))
+      {
+        window.pop_back();
+      }
+      else
+      {
+        break;
+      }
     }
     window.emplace_back(description, origin);
   };
+
   auto window_update = [&] (std::uint32_t position) -> void {
     while (!window.empty() && window.front().position() < position) {
       window.pop_front();
@@ -930,7 +1353,6 @@ std::vector<MinimizerEngine::Kmer> MinimizerEngine::Minimize(
         while (sequence->Code(i - kmer_span) == last_c) kmer_span--;
       }
     }
-
     minimizer_lo = ((minimizer_lo << 1) | (c & 1)) & mask;
     minimizer_hi = ((minimizer_hi << 1) | (c & 2)) & mask;
     reverse_minimizer_lo = (reverse_minimizer_lo >> 1) | (((c ^ 3) & 1) << shift);

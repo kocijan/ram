@@ -125,7 +125,17 @@ class MinimizerEngine {
     Match(std::uint64_t group, std::uint64_t positions, std::uint16_t spans)
         : group(group),
           positions(positions),
-          spans(spans) {
+          spans(spans),
+          kmer_hash(0)
+    {
+    }
+
+    Match(std::uint64_t group, std::uint64_t positions, std::uint16_t spans, std::uint64_t kmer_hash)
+        : group(group),
+          positions(positions),
+          spans(spans),
+          kmer_hash(kmer_hash)
+    {
     }
 
     std::uint32_t rhs_id() const {
@@ -167,6 +177,7 @@ class MinimizerEngine {
     std::uint64_t group;
     std::uint64_t positions;
     std::uint16_t spans;
+    std::uint64_t kmer_hash; // Store k-mer hash for frequency lookup
   };
 
   class Index {
@@ -192,11 +203,28 @@ class MinimizerEngine {
     std::unordered_map<std::uint64_t, Kmer, Hash, KeyEqual> locator;
   };
 
+  // K-mer frequency table type
+  using KmerFrequencyTable = std::unordered_map<std::uint64_t, std::uint32_t>;
+
+  // Count k-mers in sequences using same logic as Minimize
+  KmerFrequencyTable CountKmers(
+      std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator first,
+      std::vector<std::unique_ptr<biosoup::NucleicAcid>>::const_iterator last,
+      bool hpc = false) const;
+
+  // Count k-mers in a single sequence
+  void CountKmersInSequence(
+      const std::unique_ptr<biosoup::NucleicAcid> &sequence,
+      KmerFrequencyTable &frequency_table,
+      bool hpc = false) const;
+
   // hpc = use homopolymer compression
   std::vector<Kmer> Minimize(
-      const std::unique_ptr<biosoup::NucleicAcid>& sequence,
+      const std::unique_ptr<biosoup::NucleicAcid> &sequence,
       bool minhash = false,
-      bool hpc = false) const;
+      bool hpc = false,
+      const KmerFrequencyTable *frequency_table = nullptr,
+      std::uint32_t frequency_cutoff = 0) const;
 
   std::vector<ram::Overlap> Chain(
       std::uint64_t lhs_id,
@@ -236,6 +264,8 @@ class MinimizerEngine {
   std::uint32_t matches_;
   std::uint64_t gap_;
   std::uint32_t occurrence_;
+  std::uint32_t kmer_frequency_cutoff_;
+  KmerFrequencyTable kmer_frequencies_;
   std::vector<Index> index_;
   std::shared_ptr<thread_pool::ThreadPool> thread_pool_;
 };
